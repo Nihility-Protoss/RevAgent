@@ -4,17 +4,19 @@ import tempfile
 
 import pytest
 from google.adk.events.request_input import RequestInput
+from google.adk.workflow._function_node import FunctionNode
 from google.genai import types
 
 from agent import (
-    root_workflow,
     root_agent,
+    analysis_orchestrator,
     run_analysis,
     AnalysisTokenReport,
     StageTokenStats,
     run_analysis_with_blackboard,
     setup_fn,
     setup_node,
+    _parse_config_from_text,
 )
 
 
@@ -27,43 +29,15 @@ async def _collect_async(gen):
     return [item async for item in gen]
 
 
-def test_workflow_structure():
-    """Verify the workflow agent structure."""
-    assert root_workflow.name == "malware_analysis_workflow"
-    assert root_workflow.graph is not None
-    nodes = [n.name for n in root_workflow.graph.nodes]
-    assert "__START__" in nodes
-    assert "setup" in nodes
-    assert "string_artifact_analyst" in nodes
-    assert "api_behavior_profiler" in nodes
-    assert "export_interface_analyzer" in nodes
-    assert "behavior_profile_synthesizer" in nodes
-    assert "function_boundary_detector" in nodes
-    assert "scheduler" in nodes
-
-
-def test_workflow_edges():
-    """Verify workflow edges form correct graph."""
-    assert len(root_workflow.edges) == 4  # includes setup_fn edge
-
-    edges = [(e.from_node.name, e.to_node.name) for e in root_workflow.graph.edges]
-    # Setup: START -> setup
-    assert ("__START__", "setup") in edges
-    # Phase 0: setup -> all 3 triage workers
-    assert ("setup", "string_artifact_analyst") in edges
-    assert ("setup", "api_behavior_profiler") in edges
-    assert ("setup", "export_interface_analyzer") in edges
-    # Phase 1: Each Phase 0 worker -> both Phase 1 workers (fan-in/fan-out)
-    assert ("string_artifact_analyst", "behavior_profile_synthesizer") in edges
-    assert ("string_artifact_analyst", "function_boundary_detector") in edges
-    # Phase 2: Each Phase 1 worker -> scheduler
-    assert ("behavior_profile_synthesizer", "scheduler") in edges
-    assert ("function_boundary_detector", "scheduler") in edges
+def test_orchestrator_exists():
+    """Verify the root agent is the dynamic workflow orchestrator."""
+    assert isinstance(root_agent, FunctionNode)
+    assert root_agent.name == "analysis_orchestrator"
 
 
 def test_root_agent_alias():
-    """Verify root_agent is an alias for root_workflow."""
-    assert root_agent is root_workflow
+    """Verify root_agent points to the dynamic orchestrator."""
+    assert root_agent is analysis_orchestrator
 
 
 def test_run_analysis_signature():
@@ -169,14 +143,13 @@ def test_run_analysis_with_blackboard_signature():
 
 
 def test_setup_fn_exists():
-    from google.adk.workflow._function_node import FunctionNode
     assert isinstance(setup_fn, FunctionNode)
     assert setup_fn.name == "setup"
-    assert setup_fn.rerun_on_resume is True
+    assert setup_fn.rerun_on_resume is False
 
 
 def test_setup_node_yields_request_input_on_first_run():
-    """First run with empty state and no node_input should yield RequestInput."""
+    """setup_node should yield a RequestInput with the setup message."""
     items = asyncio.run(_collect_async(setup_node(FakeCtx(), node_input=None)))
     assert len(items) == 1
     assert isinstance(items[0], RequestInput)
@@ -184,21 +157,16 @@ def test_setup_node_yields_request_input_on_first_run():
     assert items[0].response_schema is str
 
 
-def test_setup_node_short_circuits_when_already_configured():
-    """If state already has config, setup_node yields nothing and completes."""
-    ctx = FakeCtx(
-        state={
-            "sample_export_dir": "D:\\analysis\\sample_001_export",
-            "sample_project_name": "sample_001",
-        }
-    )
-
-    items = asyncio.run(_collect_async(setup_node(ctx, node_input=None)))
-    assert items == []
+def test_setup_node_passes_error_message():
+    """setup_node should include the provided error message in the prompt."""
+    items = asyncio.run(_collect_async(setup_node(FakeCtx(), node_input="bad input")))
+    assert len(items) == 1
+    assert isinstance(items[0], RequestInput)
+    assert "[ERROR] 错误: bad input" in items[0].message
 
 
-def test_setup_node_parses_valid_config_on_resume(tmp_path):
-    """Resume with a valid user reply should write config to state and return None."""
+def test_parse_config_from_text_multiline(tmp_path):
+    """Multiline EXPORT_DIR/PROJECT_NAME/WORK_DIR should parse correctly."""
     export_dir = tmp_path / "sample_export"
     export_dir.mkdir()
 
@@ -208,74 +176,47 @@ def test_setup_node_parses_valid_config_on_resume(tmp_path):
         "WORK_DIR=D:\\analysis\\output"
     )
 
-    node_input = types.Content(
-        role="user",
-        parts=[
-            types.Part(
-                function_response=types.FunctionResponse(
-                    id="req-1",
-                    name="adk_request_input",
-                    response={"result": user_text},
-                )
-            )
-        ],
-    )
-
-    ctx = FakeCtx()
-    items = asyncio.run(_collect_async(setup_node(ctx, node_input=node_input)))
-    assert items == []
-    assert ctx.state["sample_export_dir"] == str(export_dir)
-    assert ctx.state["sample_project_name"] == "sample_001"
-    assert ctx.state["output_base"] == "D:\\analysis\\output"
+    config = _parse_config_from_text(user_text)
+    assert config["export_dir"] == str(export_dir)
+    assert config["project_name"] == "sample_001"
+    assert config["work_dir"] == "D:\\analysis\\output"
 
 
-def test_setup_node_re_requests_on_parse_failure():
-    """Invalid user reply should yield a new RequestInput with an error message."""
-    node_input = types.Content(
-        role="user",
-        parts=[
-            types.Part(
-                function_response=types.FunctionResponse(
-                    id="req-1",
-                    name="adk_request_input",
-                    response={"result": "this is not a valid config"},
-                )
-            )
-        ],
-    )
+def test_parse_config_from_text_pipe_separated(tmp_path):
+    """Pipe-separated single-line format should parse correctly."""
+    export_dir = tmp_path / "sample_export"
+    export_dir.mkdir()
 
-    ctx = FakeCtx()
-    items = asyncio.run(_collect_async(setup_node(ctx, node_input=node_input)))
-    assert len(items) == 1
-    assert isinstance(items[0], RequestInput)
-    assert "错误" in items[0].message
-    # State should remain unmodified
-    assert "sample_export_dir" not in ctx.state
+    user_text = f"EXPORT_DIR={export_dir}|PROJECT_NAME=sample_001|WORK_DIR=D:\\analysis\\output"
+
+    config = _parse_config_from_text(user_text)
+    assert config["export_dir"] == str(export_dir)
+    assert config["project_name"] == "sample_001"
+    assert config["work_dir"] == "D:\\analysis\\output"
 
 
-def test_setup_node_re_requests_on_missing_export_dir(tmp_path):
-    """Valid-looking config pointing to a non-existent directory should re-request."""
+def test_parse_config_from_text_missing_export_dir():
+    """Missing EXPORT_DIR should raise ValueError."""
+    with pytest.raises(ValueError, match="EXPORT_DIR is required"):
+        _parse_config_from_text("PROJECT_NAME=sample_001")
+
+
+def test_parse_config_from_text_missing_project_name(tmp_path):
+    """Missing PROJECT_NAME should raise ValueError."""
+    export_dir = tmp_path / "sample_export"
+    export_dir.mkdir()
+
+    with pytest.raises(ValueError, match="PROJECT_NAME is required"):
+        _parse_config_from_text(f"EXPORT_DIR={export_dir}")
+
+
+def test_parse_config_from_text_export_dir_not_exist(tmp_path):
+    """Non-existent EXPORT_DIR should raise ValueError."""
     missing_dir = tmp_path / "does_not_exist"
     user_text = f"EXPORT_DIR={missing_dir}\nPROJECT_NAME=sample_001"
 
-    node_input = types.Content(
-        role="user",
-        parts=[
-            types.Part(
-                function_response=types.FunctionResponse(
-                    id="req-1",
-                    name="adk_request_input",
-                    response={"result": user_text},
-                )
-            )
-        ],
-    )
-
-    ctx = FakeCtx()
-    items = asyncio.run(_collect_async(setup_node(ctx, node_input=node_input)))
-    assert len(items) == 1
-    assert isinstance(items[0], RequestInput)
-    assert "does not exist" in items[0].message
+    with pytest.raises(ValueError, match="does not exist"):
+        _parse_config_from_text(user_text)
 
 
 def test_blackboard_directory_structure():

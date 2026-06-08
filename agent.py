@@ -15,10 +15,9 @@ from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
-from google.adk.workflow._base_node import START
-from google.adk.workflow._workflow import Workflow
 from google.adk.events.request_input import RequestInput
 from google.adk.workflow._function_node import FunctionNode
+from google.adk.workflow import node
 from google.genai import types
 from google.adk.models.lite_llm import LiteLlm
 
@@ -123,61 +122,52 @@ LLM_MODEL = LiteLlm(
     api_base=os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
 )
 
-# === Setup Node (FunctionNode with native HITL) ===
+# === Setup Helpers ===
 
 def _build_setup_message(error: str | None = None) -> str:
     """Build the HITL configuration prompt message."""
     msg = (
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "  🔧 恶意样本分析系统 — 初始化配置\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "📁 IDA 导出目录路径 (必填):\n"
+        "================================================\n"
+        "  [SETUP] 恶意样本分析系统 - 初始化配置\n"
+        "================================================\n\n"
+        "[DIR] IDA 导出目录路径 (必填):\n"
         "   包含 strings.txt / exports.txt / imports.txt / function_index.txt\n\n"
-        "📋 项目组存档名称 (必填):\n"
+        "[NAME] 项目组存档名称 (必填):\n"
         "   用于命名 .blackboard 子目录和输出文件\n\n"
-        "💾 工作目录 (可选, 默认当前目录):\n"
+        "[WORK] 工作目录 (可选, 默认当前目录):\n"
         "   .blackboard/ 和过程文件将存放于此\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "请按以下格式回复，每行一个:\n"
+        "================================================\n\n"
+        "请按以下格式回复:\n"
+        "每行一个，或使用 '|' 分隔（推荐命令行）\n\n"
         "EXPORT_DIR=<完整路径>\n"
         "PROJECT_NAME=<名称>\n"
         "WORK_DIR=<路径>  (可选)\n\n"
-        "例如:\n"
+        "例如 (多行):\n"
         "EXPORT_DIR=D:\\analysis\\sample_001_export\n"
         "PROJECT_NAME=sample_001\n"
-        "WORK_DIR=D:\\analysis\\output"
+        "WORK_DIR=D:\\analysis\\output\n\n"
+        "例如 (单行，命令行推荐):\n"
+        "EXPORT_DIR=D:\\analysis\\sample_001_export|PROJECT_NAME=sample_001|WORK_DIR=D:\\analysis\\output"
     )
     if error:
-        msg += f"\n\n⚠️  错误: {error}\n请修正后重新提交。"
+        msg += f"\n\n[ERROR] 错误: {error}\n请修正后重新提交。"
     return msg
 
 
-def _extract_user_text(node_input: Any) -> str | None:
-    """Extract plain text from the user's function_response to RequestInput."""
-    if node_input is None:
-        return None
-
-    # node_input is typically a types.Content from ADK CLI
-    if hasattr(node_input, "parts") and node_input.parts:
-        part = node_input.parts[0]
-        if hasattr(part, "function_response") and part.function_response:
-            resp = part.function_response.response
-            if isinstance(resp, dict):
-                # CLI wraps non-JSON input as {"result": user_text}
-                value = resp.get("result", "")
-                return str(value) if value is not None else ""
-            return str(resp) if resp is not None else ""
-        if hasattr(part, "text") and part.text:
-            return part.text
-
-    return str(node_input)
-
-
 def _parse_config_from_text(text: str) -> dict:
-    """Parse EXPORT_DIR / PROJECT_NAME / WORK_DIR and validate EXPORT_DIR exists."""
+    """Parse EXPORT_DIR / PROJECT_NAME / WORK_DIR and validate EXPORT_DIR exists.
+
+    Supports both multiline format (one key per line) and pipe-separated
+    single-line format for CLI HITL where input() only reads one line.
+    """
     config = {"export_dir": None, "project_name": None, "work_dir": "."}
 
-    for raw_line in text.strip().splitlines():
+    lines = text.strip().splitlines()
+    # If no newline keys matched, fall back to pipe-separated single-line format.
+    if len(lines) == 1 and "|" in lines[0]:
+        lines = [p.strip() for p in lines[0].split("|") if p.strip()]
+
+    for raw_line in lines:
         line = raw_line.strip()
         if line.startswith("EXPORT_DIR="):
             config["export_dir"] = line[len("EXPORT_DIR="):].strip()
@@ -203,46 +193,17 @@ def _parse_config_from_text(text: str) -> dict:
     return config
 
 
+# === Setup Node (pure HITL; parsing lives in the orchestrator) ===
+
 async def setup_node(ctx: Any, node_input: Any | None = None) -> AsyncGenerator[RequestInput, None]:
-    """Setup configuration node.
+    """Yield a RequestInput to collect configuration via ADK CLI HITL.
 
-    Async generator that yields RequestInput to pause the Workflow and collect
-    configuration via ADK CLI HITL. On resume, parses the user's reply from
-    node_input, validates it, writes to session.state, and returns.
+    The parent dynamic-workflow node is responsible for parsing the reply and
+    writing configuration into session.state.
     """
-    # Branch 1: Already configured — short circuit
-    if ctx.state.get("sample_export_dir") and ctx.state.get("sample_project_name"):
-        return
-
-    # Branch 2: Resume path — parse user reply from node_input
-    if node_input is not None:
-        user_text = _extract_user_text(node_input)
-        if user_text is not None:
-            cleaned = user_text.strip()
-            if not cleaned:
-                yield RequestInput(
-                    message=_build_setup_message(error="输入为空，请提供配置。"),
-                    response_schema=str,
-                )
-                return
-            try:
-                config = _parse_config_from_text(cleaned)
-                ctx.state["sample_export_dir"] = config["export_dir"]
-                ctx.state["sample_project_name"] = config["project_name"]
-                ctx.state["output_base"] = config["work_dir"]
-                return
-            except ValueError as exc:
-                error_msg = str(exc)
-                # Fall through to re-request with the error message
-                yield RequestInput(
-                    message=_build_setup_message(error=error_msg),
-                    response_schema=str,
-                )
-                return
-
-    # Branch 3: First run — request configuration
+    error_msg = node_input if isinstance(node_input, str) else None
     yield RequestInput(
-        message=_build_setup_message(),
+        message=_build_setup_message(error=error_msg),
         response_schema=str,
     )
 
@@ -250,8 +211,59 @@ async def setup_node(ctx: Any, node_input: Any | None = None) -> AsyncGenerator[
 setup_fn = FunctionNode(
     func=setup_node,
     name="setup",
-    rerun_on_resume=True,
+    rerun_on_resume=False,
 )
+
+
+# === Dynamic Workflow Orchestrator ===
+
+@node(name="analysis_orchestrator", rerun_on_resume=True)
+async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
+    """Dynamic workflow that orchestrates setup HITL -> Phase 0 -> Phase 1 -> Phase 2."""
+    import asyncio
+
+    # --- Setup: collect configuration via HITL if not already present ---
+    max_attempts = 3
+    error_msg = None
+    for attempt in range(max_attempts):
+        if ctx.state.get("sample_export_dir") and ctx.state.get("sample_project_name"):
+            break
+
+        user_text = await ctx.run_node(setup_fn, node_input=error_msg)
+        if user_text:
+            text = str(user_text).strip()
+            try:
+                config = _parse_config_from_text(text)
+                ctx.state["sample_export_dir"] = config["export_dir"]
+                ctx.state["sample_project_name"] = config["project_name"]
+                ctx.state["output_base"] = config["work_dir"]
+                error_msg = None
+                break
+            except ValueError as exc:
+                error_msg = str(exc)
+                if attempt == max_attempts - 1:
+                    raise ValueError(
+                        f"Setup failed after {max_attempts} attempts: {exc}"
+                    ) from exc
+                continue
+
+    # --- Phase 0: Triage workers in parallel ---
+    await asyncio.gather(
+        ctx.run_node(string_artifact_analyst),
+        ctx.run_node(api_behavior_profiler),
+        ctx.run_node(export_interface_analyzer),
+    )
+
+    # --- Phase 1: Deep analysis workers in parallel ---
+    await asyncio.gather(
+        ctx.run_node(behavior_profile_synthesizer),
+        ctx.run_node(function_boundary_detector),
+    )
+
+    # --- Phase 2: Scheduler ---
+    scheduler_result = await ctx.run_node(scheduler_agent)
+    return scheduler_result
+
 
 scheduler_agent = LlmAgent(
     name="scheduler",
@@ -269,21 +281,9 @@ export_interface_analyzer.model = LLM_MODEL
 behavior_profile_synthesizer.model = LLM_MODEL
 function_boundary_detector.model = LLM_MODEL
 
-# === Root Workflow (using Workflow instead of deprecated ParallelAgent/SequentialAgent) ===
-root_workflow = Workflow(
-    name="malware_analysis_workflow",
-    edges=[
-        # Setup: collect configuration first
-        (START, setup_fn),
-        # Phase 0: Triage — 3 workers run in parallel after setup
-        (setup_fn, (string_artifact_analyst, api_behavior_profiler, export_interface_analyzer)),
-        # Phase 1: Deep Analysis — 2 workers run in parallel after Phase 0
-        ((string_artifact_analyst, api_behavior_profiler, export_interface_analyzer),
-         (behavior_profile_synthesizer, function_boundary_detector)),
-        # Phase 2: Scheduler runs after Phase 1
-        ((behavior_profile_synthesizer, function_boundary_detector), scheduler_agent),
-    ]
-)
+
+# === Root Agent: dynamic workflow orchestrator ===
+root_agent = analysis_orchestrator
 
 
 # === Token Statistics Collector ===
@@ -449,7 +449,6 @@ def run_analysis(
 
 
 # Backward compatibility: expose root_agent for ADK CLI
-root_agent = root_workflow
 
 
 # === Phase -1 to Phase 2 Orchestration with Blackboard ===
