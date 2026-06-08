@@ -15,6 +15,9 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.workflow._base_node import START
 from google.adk.workflow._workflow import Workflow
+from pathlib import Path
+from google.adk.events.request_input import RequestInput
+from google.adk.workflow._function_node import FunctionNode
 from google.genai import types
 from google.adk.models.lite_llm import LiteLlm
 
@@ -119,58 +122,124 @@ LLM_MODEL = LiteLlm(
     api_base=os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
 )
 
-# === Setup Agent ===
-SETUP_INSTRUCTION = """你是恶意样本分析系统的初始化助手。
+# === Setup Node (FunctionNode with native HITL) ===
 
-【任务】
-检查 session.state 中是否已包含分析配置。如果已包含，直接回复 "SETUP_COMPLETE"。
-如果缺少配置，向用户展示以下配置表单并等待回复。
+def _build_setup_message(error: str | None = None) -> str:
+    """Build the HITL configuration prompt message."""
+    msg = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  🔧 恶意样本分析系统 — 初始化配置\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📁 IDA 导出目录路径 (必填):\n"
+        "   包含 strings.txt / exports.txt / imports.txt / function_index.txt\n\n"
+        "📋 项目组存档名称 (必填):\n"
+        "   用于命名 .blackboard 子目录和输出文件\n\n"
+        "💾 工作目录 (可选, 默认当前目录):\n"
+        "   .blackboard/ 和过程文件将存放于此\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "请按以下格式回复，每行一个:\n"
+        "EXPORT_DIR=<完整路径>\n"
+        "PROJECT_NAME=<名称>\n"
+        "WORK_DIR=<路径>  (可选)\n\n"
+        "例如:\n"
+        "EXPORT_DIR=D:\\analysis\\sample_001_export\n"
+        "PROJECT_NAME=sample_001\n"
+        "WORK_DIR=D:\\analysis\\output"
+    )
+    if error:
+        msg += f"\n\n⚠️  错误: {error}\n请修正后重新提交。"
+    return msg
 
-【配置表单】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🔧 恶意样本分析系统 — 初始化配置
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📁 IDA 导出目录路径 (必填):
-   包含 strings.txt / exports.txt / imports.txt / function_index.txt
+def _extract_user_text(node_input) -> str | None:
+    """Extract plain text from the user's function_response to RequestInput."""
+    if node_input is None:
+        return None
 
-📋 项目组存档名称 (必填):
-   用于命名 .blackboard 子目录和输出文件
+    # node_input is typically a types.Content from ADK CLI
+    if hasattr(node_input, "parts") and node_input.parts:
+        part = node_input.parts[0]
+        if hasattr(part, "function_response") and part.function_response:
+            resp = part.function_response.response
+            if isinstance(resp, dict):
+                # CLI wraps non-JSON input as {"result": user_text}
+                value = resp.get("result", "")
+                return str(value) if value is not None else ""
+            return str(resp) if resp is not None else ""
+        if hasattr(part, "text") and part.text:
+            return part.text
 
-💾 工作目录 (可选, 默认当前目录):
-   .blackboard/ 和过程文件将存放于此
+    return str(node_input)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-【用户回复格式】
-请按以下格式回复，每行一个：
-EXPORT_DIR=<IDA导出目录的完整路径>
-PROJECT_NAME=<项目组名称>
-WORK_DIR=<工作目录路径>  (可选)
+def _parse_config_from_text(text: str) -> dict:
+    """Parse EXPORT_DIR / PROJECT_NAME / WORK_DIR and validate EXPORT_DIR exists."""
+    config = {"export_dir": None, "project_name": None, "work_dir": "."}
 
-例如：
-EXPORT_DIR=D:\\analysis\\sample_001_export
-PROJECT_NAME=sample_001
-WORK_DIR=D:\\analysis\\output
+    for raw_line in text.strip().splitlines():
+        line = raw_line.strip()
+        if line.startswith("EXPORT_DIR="):
+            config["export_dir"] = line[len("EXPORT_DIR="):].strip()
+        elif line.startswith("PROJECT_NAME="):
+            config["project_name"] = line[len("PROJECT_NAME="):].strip()
+        elif line.startswith("WORK_DIR="):
+            config["work_dir"] = line[len("WORK_DIR="):].strip() or "."
 
-【解析规则】
-当用户按上述格式回复后，你需要：
-1. 提取 EXPORT_DIR 的值，写入 session.state["sample_export_dir"]
-2. 提取 PROJECT_NAME 的值，写入 session.state["sample_project_name"]
-3. 如果 WORK_DIR 存在，写入 session.state["output_base"]；否则设为 "."
-4. 回复 "SETUP_COMPLETE"
+    if not config["export_dir"]:
+        raise ValueError("EXPORT_DIR is required")
+    if not config["project_name"]:
+        raise ValueError("PROJECT_NAME is required")
 
-【注意事项】
-- 如果 session.state 中 sample_export_dir 和 sample_project_name 都已存在，直接回复 SETUP_COMPLETE
-- 不要询问其他信息，只收集这三个配置项
-- 输出必须是纯文本表单，不要用 markdown 代码块包裹
-"""
+    export_path = Path(config["export_dir"])
+    if not export_path.exists():
+        raise ValueError(f"EXPORT_DIR does not exist: {config['export_dir']}")
+    if not export_path.is_dir():
+        raise ValueError(f"EXPORT_DIR is not a directory: {config['export_dir']}")
 
-setup_agent = LlmAgent(
+    return config
+
+
+async def setup_node(ctx, node_input=None):
+    """Setup configuration node.
+
+    Async generator that yields RequestInput to pause the Workflow and collect
+    configuration via ADK CLI HITL. On resume, parses the user's reply from
+    node_input, validates it, writes to session.state, and returns.
+    """
+    # Branch 1: Already configured — short circuit
+    if ctx.state.get("sample_export_dir") and ctx.state.get("sample_project_name"):
+        return
+
+    # Branch 2: Resume path — parse user reply from node_input
+    if node_input is not None:
+        user_text = _extract_user_text(node_input)
+        if user_text:
+            try:
+                config = _parse_config_from_text(user_text)
+                ctx.state["sample_export_dir"] = config["export_dir"]
+                ctx.state["sample_project_name"] = config["project_name"]
+                ctx.state["output_base"] = config["work_dir"]
+                return
+            except ValueError as exc:
+                error_msg = str(exc)
+                # Fall through to re-request with the error message
+                yield RequestInput(
+                    message=_build_setup_message(error=error_msg),
+                    response_schema=str,
+                )
+                return
+
+    # Branch 3: First run — request configuration
+    yield RequestInput(
+        message=_build_setup_message(),
+        response_schema=str,
+    )
+
+
+setup_fn = FunctionNode(
+    func=setup_node,
     name="setup",
-    model=LLM_MODEL,
-    instruction=SETUP_INSTRUCTION,
-    output_key="setup_result",
+    rerun_on_resume=True,
 )
 
 scheduler_agent = LlmAgent(
@@ -194,9 +263,9 @@ root_workflow = Workflow(
     name="malware_analysis_workflow",
     edges=[
         # Setup: collect configuration first
-        (START, setup_agent),
+        (START, setup_fn),
         # Phase 0: Triage — 3 workers run in parallel after setup
-        (setup_agent, (string_artifact_analyst, api_behavior_profiler, export_interface_analyzer)),
+        (setup_fn, (string_artifact_analyst, api_behavior_profiler, export_interface_analyzer)),
         # Phase 1: Deep Analysis — 2 workers run in parallel after Phase 0
         ((string_artifact_analyst, api_behavior_profiler, export_interface_analyzer),
          (behavior_profile_synthesizer, function_boundary_detector)),
