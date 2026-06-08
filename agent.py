@@ -9,6 +9,7 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.workflow._base_node import START
 from google.adk.workflow._workflow import Workflow
 from google.genai import types
+from google.adk.models.lite_llm import LiteLlm
 
 # Import workers
 from workers.phase0.string_artifact_analyst import string_artifact_analyst
@@ -99,15 +100,28 @@ Phase 0（快速定性）和 Phase 1（行为定型+函数筛选）已完成。5
 - 不修改 Worker 的分析结果，只进行排序和筛选
 """
 
+# === LiteLLM Model Configuration ===
+LLM_MODEL = LiteLlm(
+    model=os.getenv("MOONSHOT_MODEL", "openai/kimi-k2.5"),
+    api_key=os.getenv("MOONSHOT_API_KEY"),
+    api_base=os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
+)
+
 scheduler_agent = LlmAgent(
     name="scheduler",
-    model="gemini-2.5-flash",
+    model=LLM_MODEL,
     description="Central scheduler that coordinates analysis workers and triggers human review.",
     instruction=SCHEDULER_INSTRUCTION,
     after_agent_callback=human_review_callback,
     output_key="scheduler_decision",
 )
 
+# Override model for all workers
+string_artifact_analyst.model = LLM_MODEL
+api_behavior_profiler.model = LLM_MODEL
+export_interface_analyzer.model = LLM_MODEL
+behavior_profile_synthesizer.model = LLM_MODEL
+function_boundary_detector.model = LLM_MODEL
 
 # === Root Workflow (using Workflow instead of deprecated ParallelAgent/SequentialAgent) ===
 root_workflow = Workflow(
