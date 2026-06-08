@@ -232,6 +232,57 @@ def bb_log_event(event_type: str, details: dict, project_name: str) -> dict:
         return {"status": "error", "reason": "write_error", "error": str(e)}
 
 
+def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) -> dict:
+    """Load decompile/disassembly snippets for a single function.
+
+    Args:
+        func_addr: Function address (e.g., '0x180001000').
+        export_dir: Path to the IDA export directory (contains decompile/ and disassembly/).
+        max_lines: Maximum lines to read from each file.
+
+    Returns:
+        Dict with status, addr, name, decompile_snippet, disassembly_snippet, xrefs.
+    """
+    result = {
+        "status": "success",
+        "error": None,
+        "addr": func_addr,
+        "name": None,
+        "decompile_snippet": None,
+        "disassembly_snippet": None,
+        "xrefs_in": [],
+        "xrefs_out": [],
+        "size": 0,
+    }
+
+    addr_clean = func_addr.replace("0x", "").replace("0X", "")
+
+    # Read decompile
+    decompile_path = os.path.join(export_dir, "decompile", f"{addr_clean}.c")
+    if os.path.exists(decompile_path):
+        try:
+            with open(decompile_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()[:max_lines]
+            result["decompile_snippet"] = "".join(lines)
+        except Exception as e:
+            result["error"] = f"decompile_read_error: {e}"
+
+    # Read disassembly
+    disasm_path = os.path.join(export_dir, "disassembly", f"{addr_clean}.asm")
+    if os.path.exists(disasm_path):
+        try:
+            with open(disasm_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()[:max_lines]
+            result["disassembly_snippet"] = "".join(lines)
+        except Exception as e:
+            if result["error"]:
+                result["error"] += f"; disassembly_read_error: {e}"
+            else:
+                result["error"] = f"disassembly_read_error: {e}"
+
+    return result
+
+
 # --- Utility ---
 
 def _now_iso() -> str:

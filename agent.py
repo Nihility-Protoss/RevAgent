@@ -327,6 +327,7 @@ from tools.blackboard_tools import (
 )
 from tools.file_loaders import pre_extract_sample
 from workers.extractor import build_extraction_prompt, extractor_agent
+from workers.phase3.function_deep_analyzer import build_func_analysis_prompt, function_deep_analyzer
 
 
 async def run_analysis_with_blackboard(
@@ -440,3 +441,95 @@ async def _persist_worker_output(worker, raw_output, artifact_type, project_name
             bb_write_summary(f"{artifact_type}_summary", summary_data, project_name)
         except json.JSONDecodeError:
             bb_log_event("extractor_parse_failed", {"worker": worker.name, "type": artifact_type}, project_name)
+
+
+async def phase3_function_analysis(
+    runner, session, project_name, sample_export_dir, token_report
+):
+    """Phase 3: Dynamic per-function deep analysis loop."""
+    from google.genai import types
+
+    # Read approved functions from Phase 2 decision
+    decision_summary = bb_read_summary("p2_decision", project_name)
+    if decision_summary.get("status") != "success":
+        bb_log_event("phase3_skipped", {"reason": "no_decision"}, project_name)
+        return []
+
+    pending = decision_summary["data"].get("approved_functions", [])
+    pending.sort(key=lambda x: x.get("priority", 99))
+
+    all_events = []
+
+    for func in pending:
+        addr = func["addr"]
+        name = func.get("name", f"func_{addr}")
+
+        # Skip already analyzed (resume support)
+        if bb_has_artifact(f"phase3_func_{addr}", project_name):
+            continue
+
+        # Load function data via Tool
+        func_data = load_function_data(addr, sample_export_dir)
+        if func_data.get("status") != "success":
+            bb_log_event("phase3_func_load_failed", {"addr": addr}, project_name)
+            continue
+
+        # Build analyzer for this function
+        prompt = build_func_analysis_prompt(addr, name, func_data)
+        analyzer = LlmAgent(
+            name=f"func_analyzer_{addr}",
+            model=LLM_MODEL,
+            instruction=prompt,
+            output_key=f"func_analysis_{addr}",
+        )
+
+        # Run analyzer
+        func_session_service = InMemorySessionService()
+        func_session = func_session_service.create_session(
+            app_name="func_analysis", user_id="system",
+            session_id=f"func_{addr}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+        )
+        func_runner = Runner(agent=analyzer, app_name="func_analysis", session_service=func_session_service)
+        func_content = types.Content(role="user", parts=[types.Part(text=prompt)])
+
+        func_output = None
+        for event in func_runner.run(user_id="system", session_id=func_session.id, new_message=func_content):
+            token_report.add_event_usage(event)
+            all_events.append(event)
+            if event.is_final_response() and event.content and event.content.parts:
+                func_output = event.content.parts[0].text
+
+        # Save artifact
+        if func_output:
+            try:
+                artifact = json.loads(func_output)
+            except json.JSONDecodeError:
+                artifact = {"raw": func_output, "parse_error": True}
+            bb_write_artifact(f"phase3_func_{addr}", artifact, project_name)
+
+            # Extract summary via Extractor
+            extract_prompt = build_extraction_prompt(artifact, "function_deep")
+            extractor_service = InMemorySessionService()
+            extractor_session = extractor_service.create_session(
+                app_name="extractor", user_id="system", session_id=f"extract_func_{addr}",
+            )
+            extractor_runner = Runner(agent=extractor_agent, app_name="extractor", session_service=extractor_service)
+            extractor_content = types.Content(role="user", parts=[types.Part(text=extract_prompt)])
+
+            summary_output = None
+            for ex_event in extractor_runner.run(user_id="system", session_id=extractor_session.id, new_message=extractor_content):
+                token_report.add_event_usage(ex_event)
+                if ex_event.is_final_response() and ex_event.content and ex_event.content.parts:
+                    summary_output = ex_event.content.parts[0].text
+
+            if summary_output:
+                try:
+                    summary_data = json.loads(summary_output)
+                    bb_write_summary(f"phase3_funcs/func_{addr}", summary_data, project_name)
+                except json.JSONDecodeError:
+                    bb_log_event("extractor_parse_failed", {"worker": f"func_{addr}"}, project_name)
+
+        bb_checkpoint(f"phase3_progress_{addr}", project_name)
+
+    bb_checkpoint("phase3_complete", project_name)
+    return all_events
