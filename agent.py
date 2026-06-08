@@ -119,6 +119,60 @@ LLM_MODEL = LiteLlm(
     api_base=os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
 )
 
+# === Setup Agent ===
+SETUP_INSTRUCTION = """你是恶意样本分析系统的初始化助手。
+
+【任务】
+检查 session.state 中是否已包含分析配置。如果已包含，直接回复 "SETUP_COMPLETE"。
+如果缺少配置，向用户展示以下配置表单并等待回复。
+
+【配置表单】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🔧 恶意样本分析系统 — 初始化配置
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📁 IDA 导出目录路径 (必填):
+   包含 strings.txt / exports.txt / imports.txt / function_index.txt
+
+📋 项目组存档名称 (必填):
+   用于命名 .blackboard 子目录和输出文件
+
+💾 工作目录 (可选, 默认当前目录):
+   .blackboard/ 和过程文件将存放于此
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【用户回复格式】
+请按以下格式回复，每行一个：
+EXPORT_DIR=<IDA导出目录的完整路径>
+PROJECT_NAME=<项目组名称>
+WORK_DIR=<工作目录路径>  (可选)
+
+例如：
+EXPORT_DIR=D:\\analysis\\sample_001_export
+PROJECT_NAME=sample_001
+WORK_DIR=D:\\analysis\\output
+
+【解析规则】
+当用户按上述格式回复后，你需要：
+1. 提取 EXPORT_DIR 的值，写入 session.state["sample_export_dir"]
+2. 提取 PROJECT_NAME 的值，写入 session.state["sample_project_name"]
+3. 如果 WORK_DIR 存在，写入 session.state["output_base"]；否则设为 "."
+4. 回复 "SETUP_COMPLETE"
+
+【注意事项】
+- 如果 session.state 中 sample_export_dir 和 sample_project_name 都已存在，直接回复 SETUP_COMPLETE
+- 不要询问其他信息，只收集这三个配置项
+- 输出必须是纯文本表单，不要用 markdown 代码块包裹
+"""
+
+setup_agent = LlmAgent(
+    name="setup",
+    model=LLM_MODEL,
+    instruction=SETUP_INSTRUCTION,
+    output_key="setup_result",
+)
+
 scheduler_agent = LlmAgent(
     name="scheduler",
     model=LLM_MODEL,
@@ -139,12 +193,14 @@ function_boundary_detector.model = LLM_MODEL
 root_workflow = Workflow(
     name="malware_analysis_workflow",
     edges=[
-        # Phase 0: Triage — 3 workers run in parallel
-        (START, (string_artifact_analyst, api_behavior_profiler, export_interface_analyzer)),
-        # Phase 1: Deep Analysis — 2 workers run in parallel after Phase 0 completes
+        # Setup: collect configuration first
+        (START, setup_agent),
+        # Phase 0: Triage — 3 workers run in parallel after setup
+        (setup_agent, (string_artifact_analyst, api_behavior_profiler, export_interface_analyzer)),
+        # Phase 1: Deep Analysis — 2 workers run in parallel after Phase 0
         ((string_artifact_analyst, api_behavior_profiler, export_interface_analyzer),
          (behavior_profile_synthesizer, function_boundary_detector)),
-        # Phase 2: Scheduler runs after Phase 1 completes
+        # Phase 2: Scheduler runs after Phase 1
         ((behavior_profile_synthesizer, function_boundary_detector), scheduler_agent),
     ]
 )

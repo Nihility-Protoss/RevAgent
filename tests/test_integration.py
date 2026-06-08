@@ -14,6 +14,7 @@ def test_workflow_structure():
     assert root_workflow.graph is not None
     nodes = [n.name for n in root_workflow.graph.nodes]
     assert "__START__" in nodes
+    assert "setup" in nodes
     assert "string_artifact_analyst" in nodes
     assert "api_behavior_profiler" in nodes
     assert "export_interface_analyzer" in nodes
@@ -24,11 +25,15 @@ def test_workflow_structure():
 
 def test_workflow_edges():
     """Verify workflow edges form correct graph."""
+    assert len(root_workflow.edges) == 4  # includes setup_agent edge
+
     edges = [(e.from_node.name, e.to_node.name) for e in root_workflow.graph.edges]
-    # Phase 0: START -> all 3 triage workers
-    assert ("__START__", "string_artifact_analyst") in edges
-    assert ("__START__", "api_behavior_profiler") in edges
-    assert ("__START__", "export_interface_analyzer") in edges
+    # Setup: START -> setup
+    assert ("__START__", "setup") in edges
+    # Phase 0: setup -> all 3 triage workers
+    assert ("setup", "string_artifact_analyst") in edges
+    assert ("setup", "api_behavior_profiler") in edges
+    assert ("setup", "export_interface_analyzer") in edges
     # Phase 1: Each Phase 0 worker -> both Phase 1 workers (fan-in/fan-out)
     assert ("string_artifact_analyst", "behavior_profile_synthesizer") in edges
     assert ("string_artifact_analyst", "function_boundary_detector") in edges
@@ -147,6 +152,11 @@ def test_run_analysis_with_blackboard_signature():
     import inspect
     from agent import run_analysis_with_blackboard
     assert inspect.iscoroutinefunction(run_analysis_with_blackboard)
+
+
+def test_setup_agent_exists():
+    from agent import setup_agent
+    assert setup_agent.name == "setup"
 
 
 def test_blackboard_directory_structure():
