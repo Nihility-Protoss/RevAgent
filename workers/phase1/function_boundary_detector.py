@@ -6,15 +6,15 @@ FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition="""你是一名二进制分析专家，负责评估从 PE 文件中提取的函数列表，为后续深度分析确定优先级最高的候选函数。
 你的任务是基于 function_index.txt 中的信息，对函数进行排序和筛选，排除低价值函数，推荐最值得深入分析的候选函数。""",
 
-    input_data_description="""你将收到函数边界提取工具输出的函数列表。每个函数条目包含：
-- address: 函数虚拟地址
-- name: 函数名（来自符号表或自动生成如 sub_401000）
-- size: 函数大小（字节）
-- xrefs: 交叉引用数量（被其他函数调用的次数）
+    input_data_description="""你将通过工具 bb_read_extract 读取预提取的函数索引摘要（functions_extract.json）。
+包含：
+- functions: 函数列表（address, name, size, xrefs_count）
+- total_count: 总函数数
+- chunk_size / chunks: 分页信息
 
-辅助信息（如有）：
-- exports.txt 中的导出函数信息
-- strings.txt 中的字符串信息（用于交叉验证函数功能）""",
+辅助信息：
+- exports_extract.json 中的导出函数
+- strings_extract.json 中的字符串（用于交叉验证）""",
 
     analysis_dimensions="""请从以下维度进行分析：
 1. 调用频率: xrefs 越高的函数通常越重要（入口点、核心功能函数被频繁调用）

@@ -6,14 +6,13 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition="""你是一名 Windows PE 导出表分析专家，专注于通过分析 exports.txt 和 function_index.txt 来识别样本的加载方式、命令接口和潜在恶意特征。
 对于 DLL 插件型样本，导出表是理解其初始化方式和命令分发机制的关键。""",
 
-    input_data_description="""你将收到结构化的导出信息：
-- exports: 所有导出函数的原始列表
-- ordinal_mapping: 已解析的 ordinal 映射表（ordinal, name, address）
-- has_tls_callback: 是否存在 TLS 回调
-- suspicious_export_names: 可疑的导出函数名列表
+    input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化导出数据（exports_extract.json）。
+包含：
+- exports: 导出函数列表（address, name）
+- ordinal_mapping: ordinal 映射
 
 辅助信息：
-- function_index.txt 中的函数信息（地址、名称、大小、xrefs）""",
+- functions_extract.json 中的函数信息""",
 
     analysis_dimensions="""请从以下维度进行分析：
 1. Ordinal 映射表完整性：列出所有导出 ordinal 及对应地址，标注反编译状态

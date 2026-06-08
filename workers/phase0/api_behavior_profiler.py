@@ -6,14 +6,13 @@ API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition="""你是一名恶意代码行为分析专家，专注于通过 PE 文件的导入表（Import Directory Table）和导入地址表（IAT）推断样本的潜在恶意行为模式。
 你的核心任务是从 imports.txt 中识别 API 组合、行为画像，并与 MITRE ATT&CK 技术进行映射。""",
 
-    input_data_description="""你将收到结构化的导入信息（已按威胁优先级排序）：
-- imports: 所有导入函数/序号的原始列表
-- dll_to_apis: 按 DLL 分组的 API 列表
-- api_categories: 已预分类的 API（进程注入、文件操作、网络通信、注册表、加密、反分析、持久化、信息窃取、UAC绕过）
-- ordinal_imports: 通过序号导入的函数列表
+    input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化导入数据（imports_extract.json）。
+数据已按 DLL 分组：
+- dll_to_apis: {DLL名: [API列表]}
+- imports_flat: 所有导入的扁平列表
 
 辅助信息（如有）：
-- strings.txt 中的可疑字符串（用于交叉验证 API 哈希动态解析）""",
+- strings_extract.json 中的可疑字符串（用于交叉验证 API 哈希动态解析）""",
 
     analysis_dimensions="""请从以下维度进行分析：
 1. API 组合分析：识别同时出现的 API 组合，这些组合强烈暗示特定恶意行为：

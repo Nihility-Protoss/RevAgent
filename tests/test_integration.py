@@ -1,3 +1,4 @@
+import pytest
 from agent import (
     root_workflow,
     root_agent,
@@ -135,3 +136,33 @@ def test_stage_token_stats_add_usage():
     stats.add_usage(MockUsage())
     assert stats.prompt_tokens == 200
     assert stats.call_count == 2
+
+
+import tempfile
+import os
+
+
+def test_run_analysis_with_blackboard_signature():
+    """New runner should exist and be async."""
+    import inspect
+    from agent import run_analysis_with_blackboard
+    assert inspect.iscoroutinefunction(run_analysis_with_blackboard)
+
+
+def test_blackboard_directory_structure():
+    """Running pre-extract should create .blackboard/ structure."""
+    from tools.file_loaders import pre_extract_sample
+    fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "module.upx_export_for_ai")
+    if not os.path.exists(fixture_dir):
+        pytest.skip("Fixture data not found")
+
+    orig_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.chdir(tmpdir)
+        try:
+            result = pre_extract_sample(fixture_dir, "test_project")
+            assert result["status"] == "success"
+            assert os.path.exists(os.path.join(".blackboard", "test_project", "extracts"))
+            assert os.path.exists(os.path.join(".blackboard", "test_project", "extracts", "strings_extract.json"))
+        finally:
+            os.chdir(orig_cwd)

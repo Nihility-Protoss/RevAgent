@@ -7,15 +7,17 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 你的任务是通过分析 strings.txt 中的内容，识别数据文件名、PDB路径、密钥字符串、URL、注册表路径、互斥体名等关键线索。
 核心原则：对于 Windows PE 样本，strings.txt 的优先级高于 imports.txt（API 哈希可绕过 IAT，但字符串无法隐藏）。""",
 
-    input_data_description="""你将收到由预处理工具从 strings.txt 提取的结构化字符串信息：
-- all_strings: 所有字符串的完整列表
-- data_filenames: 疑似数据文件名的字符串（.dat, .pptx, .ini, .config, .bin 等）
-- pdb_paths: PDB 调试符号路径
-- urls: HTTP/HTTPS URL 字符串
-- registry_paths: 注册表路径字符串
-- mutex_names: 互斥体名称
-- suspicious_keywords: 可疑关键词（cmd, powershell, wscript 等）
-- powershell_params: PowerShell 参数（-enc, -windowstyle hidden 等）""",
+    input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化字符串数据（strings_extract.json）。
+数据已按类别分组：
+- by_category.urls: URL/域名列表
+- by_category.registry_keys: 注册表路径
+- by_category.file_paths: 疑似数据文件路径
+- by_category.pdb_paths: PDB 调试符号路径
+- by_category.mutexes: 互斥体名称
+- by_category.error_messages: 错误消息字符串
+
+每次调用返回一个分片（默认chunk_size=100），如 has_more=true 则需要多次调用。
+你不需要读取所有分片——优先关注可疑类别（URL、注册表、互斥体、PDB）。""",
 
     analysis_dimensions="""请从以下维度进行分析：
 1. 数据文件名分析：列出所有疑似数据文件名，评估是否为文件加载型样本的关键证据

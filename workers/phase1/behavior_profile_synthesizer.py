@@ -6,17 +6,17 @@ BEHAVIOR_PROFILE_SYNTHESIZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition="""你是一名恶意样本架构分析专家，负责综合 strings.txt、imports.txt 和 exports.txt 的分析结果，对样本进行行为定型和架构推断。
 你的任务是基于 Phase 0 各 Worker 的输出（或直接从原始数据），判断样本属于 RAT/Stealer/Loader/Backdoor 中的哪一类，并推断其持久化机制、信息窃取模式、反调试对抗和动态断点矩阵。""",
 
-    input_data_description="""你将收到以下输入（优先从 session.state 读取，若不存在则直接读取原始文件）：
+    input_data_description="""你将收到以下输入：
 
-Phase 0 Worker 输出（优先）：
-- string_analysis: 字符串分析结果（数据文件名、PDB路径、URL、注册表等）
-- api_behavior_analysis: API 行为分析结果（API组合、行为画像、MITRE映射）
-- export_interface_analysis: 导出表分析结果（加载方式、ordinal映射、命令接口）
+Phase 0 分析摘要（通过 bb_read_summary 读取）：
+- strings_summary: 字符串关键发现
+- api_summary: API 行为画像
+- exports_summary: 导出表分析
 
-原始数据（降级方案）：
-- strings.txt 内容
-- imports.txt 内容
-- exports.txt 内容""",
+原始数据（降级方案，通过 bb_read_extract 读取）：
+- strings_extract.json
+- imports_extract.json
+- exports_extract.json""",
 
     analysis_dimensions="""请从以下维度进行综合分析：
 1. 行为模式定型（四选一或多选）：
