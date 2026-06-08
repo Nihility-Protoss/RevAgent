@@ -7,7 +7,9 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from typing import Dict, List, Any, Optional
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from pathlib import Path
 from dotenv import load_dotenv
 
 from google.adk.agents import LlmAgent
@@ -15,7 +17,6 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.workflow._base_node import START
 from google.adk.workflow._workflow import Workflow
-from pathlib import Path
 from google.adk.events.request_input import RequestInput
 from google.adk.workflow._function_node import FunctionNode
 from google.genai import types
@@ -151,7 +152,7 @@ def _build_setup_message(error: str | None = None) -> str:
     return msg
 
 
-def _extract_user_text(node_input) -> str | None:
+def _extract_user_text(node_input: Any) -> str | None:
     """Extract plain text from the user's function_response to RequestInput."""
     if node_input is None:
         return None
@@ -191,15 +192,18 @@ def _parse_config_from_text(text: str) -> dict:
         raise ValueError("PROJECT_NAME is required")
 
     export_path = Path(config["export_dir"])
-    if not export_path.exists():
-        raise ValueError(f"EXPORT_DIR does not exist: {config['export_dir']}")
-    if not export_path.is_dir():
-        raise ValueError(f"EXPORT_DIR is not a directory: {config['export_dir']}")
+    try:
+        if not export_path.exists():
+            raise ValueError(f"EXPORT_DIR does not exist: {config['export_dir']}")
+        if not export_path.is_dir():
+            raise ValueError(f"EXPORT_DIR is not a directory: {config['export_dir']}")
+    except OSError as exc:
+        raise ValueError(f"Cannot access EXPORT_DIR: {exc}") from exc
 
     return config
 
 
-async def setup_node(ctx, node_input=None):
+async def setup_node(ctx: Any, node_input: Any | None = None) -> AsyncGenerator[RequestInput, None]:
     """Setup configuration node.
 
     Async generator that yields RequestInput to pause the Workflow and collect
@@ -213,9 +217,16 @@ async def setup_node(ctx, node_input=None):
     # Branch 2: Resume path — parse user reply from node_input
     if node_input is not None:
         user_text = _extract_user_text(node_input)
-        if user_text:
+        if user_text is not None:
+            cleaned = user_text.strip()
+            if not cleaned:
+                yield RequestInput(
+                    message=_build_setup_message(error="输入为空，请提供配置。"),
+                    response_schema=str,
+                )
+                return
             try:
-                config = _parse_config_from_text(user_text)
+                config = _parse_config_from_text(cleaned)
                 ctx.state["sample_export_dir"] = config["export_dir"]
                 ctx.state["sample_project_name"] = config["project_name"]
                 ctx.state["output_base"] = config["work_dir"]
