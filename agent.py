@@ -328,6 +328,7 @@ from tools.blackboard_tools import (
 from tools.file_loaders import pre_extract_sample
 from workers.extractor import build_extraction_prompt, extractor_agent
 from workers.phase3.function_deep_analyzer import build_func_analysis_prompt, function_deep_analyzer
+from workers.phase4.synthesis_agent import synthesis_agent
 
 
 async def run_analysis_with_blackboard(
@@ -533,3 +534,53 @@ async def phase3_function_analysis(
 
     bb_checkpoint("phase3_complete", project_name)
     return all_events
+
+
+async def phase4_final_synthesis(project_name, token_report):
+    """Phase 4: Aggregate all summaries into final report."""
+    from google.genai import types
+
+    p0_strings = bb_read_summary("strings_summary", project_name)
+    p0_api = bb_read_summary("api_summary", project_name)
+    p0_exports = bb_read_summary("exports_summary", project_name)
+    p1_behavior = bb_read_summary("behavior_summary", project_name)
+    p1_functions = bb_read_summary("functions_summary", project_name)
+    p3_summaries = bb_list_summaries("phase3_funcs/", project_name)
+
+    context = {
+        "phase0": {
+            "strings": p0_strings.get("data") if p0_strings.get("status") == "success" else {},
+            "api": p0_api.get("data") if p0_api.get("status") == "success" else {},
+            "exports": p0_exports.get("data") if p0_exports.get("status") == "success" else {},
+        },
+        "phase1": {
+            "behavior": p1_behavior.get("data") if p1_behavior.get("status") == "success" else {},
+            "functions": p1_functions.get("data") if p1_functions.get("status") == "success" else {},
+        },
+        "phase3": {
+            "total_analyzed": len(p3_summaries),
+            "suspicious_findings": [s for s in p3_summaries if s.get("suspicious")],
+        },
+    }
+
+    synth_session = InMemorySessionService()
+    synth_session_obj = synth_session.create_session(
+        app_name="synthesis", user_id="system", session_id=f"synth_{project_name}",
+    )
+    synth_runner = Runner(agent=synthesis_agent, app_name="synthesis", session_service=synth_session)
+    synth_content = types.Content(role="user", parts=[types.Part(text=json.dumps(context, ensure_ascii=False))])
+
+    report_output = None
+    for event in synth_runner.run(user_id="system", session_id=synth_session_obj.id, new_message=synth_content):
+        token_report.add_event_usage(event)
+        if event.is_final_response() and event.content and event.content.parts:
+            report_output = event.content.parts[0].text
+
+    if report_output:
+        try:
+            report = json.loads(report_output)
+            bb_write_summary("p4_final_report", report, project_name)
+        except json.JSONDecodeError:
+            bb_write_summary("p4_final_report", {"raw": report_output, "parse_error": True}, project_name)
+
+    bb_checkpoint("phase4_complete", project_name)
