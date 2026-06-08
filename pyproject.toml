@@ -1,6 +1,14 @@
 [project]
 name = "multi-agent-adk"
 version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.14"
-dependencies = []
+description = "Malware analysis multi-agent system using Google ADK"
+requires-python = ">=3.10"
+dependencies = [
+    "google-adk>=0.2.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
