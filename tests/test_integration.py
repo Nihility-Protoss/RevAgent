@@ -35,6 +35,17 @@ def test_orchestrator_exists():
     assert root_agent.name == "analysis_orchestrator"
 
 
+def test_analysis_orchestrator_rerun_on_resume():
+    """The orchestrator must rerun on resume so HITL works correctly."""
+    assert analysis_orchestrator.rerun_on_resume is True
+
+
+def test_analysis_orchestrator_is_async():
+    """The orchestrator must be an async function."""
+    import inspect
+    assert inspect.iscoroutinefunction(analysis_orchestrator._func)
+
+
 def test_root_agent_alias():
     """Verify root_agent points to the dynamic orchestrator."""
     assert root_agent is analysis_orchestrator
