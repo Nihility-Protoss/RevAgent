@@ -90,7 +90,6 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
 export_interface_analyzer = LlmAgent(
     name="export_interface_analyzer",
-    model="gemini-2.5-flash",
     description="Analyzes export table to identify loading patterns, command interfaces, and DLL plugin architecture.",
     instruction=EXPORT_INTERFACE_ANALYZER_INSTRUCTION,
     tools=[load_exports, load_function_index],

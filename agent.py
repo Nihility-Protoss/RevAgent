@@ -1,4 +1,11 @@
 import os
+import sys
+
+# Ensure project root is in Python path for ADK CLI imports
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
@@ -101,8 +108,13 @@ Phase 0（快速定性）和 Phase 1（行为定型+函数筛选）已完成。5
 """
 
 # === LiteLLM Model Configuration ===
+_raw_model = os.getenv("MOONSHOT_MODEL", "openai/kimi-k2.5")
+# Ensure openai/ prefix for LiteLlm to route to OpenAI-compatible API
+if "/" not in _raw_model:
+    _raw_model = f"openai/{_raw_model}"
+
 LLM_MODEL = LiteLlm(
-    model=os.getenv("MOONSHOT_MODEL", "openai/kimi-k2.5"),
+    model=_raw_model,
     api_key=os.getenv("MOONSHOT_API_KEY"),
     api_base=os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
 )

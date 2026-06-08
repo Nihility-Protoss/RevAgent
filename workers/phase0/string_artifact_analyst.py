@@ -79,7 +79,6 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
 string_artifact_analyst = LlmAgent(
     name="string_artifact_analyst",
-    model="gemini-2.5-flash",
     description="Analyzes strings.txt from IDA export to extract forensic artifacts and behavioral indicators.",
     instruction=STRING_ARTIFACT_ANALYST_INSTRUCTION,
     tools=[load_strings],

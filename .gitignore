@@ -1,2 +1,5 @@
 /.idea/
 .env
+.adk/
+data/
+uv.lock

@@ -80,7 +80,6 @@ FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
 function_boundary_detector = LlmAgent(
     name="function_boundary_detector",
-    model="gemini-2.5-flash",
     description="Evaluates function list to determine high-priority candidates for deep analysis.",
     instruction=FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION,
     tools=[load_function_index, load_exports, load_strings],

@@ -91,7 +91,6 @@ API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
 api_behavior_profiler = LlmAgent(
     name="api_behavior_profiler",
-    model="gemini-2.5-flash",
     description="Profiles API behavior from imports.txt to identify malware patterns and MITRE mappings.",
     instruction=API_BEHAVIOR_PROFILER_INSTRUCTION,
     tools=[load_imports, load_strings],

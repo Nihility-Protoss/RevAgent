@@ -130,7 +130,6 @@ Phase 0 Worker 输出（优先）：
 
 behavior_profile_synthesizer = LlmAgent(
     name="behavior_profile_synthesizer",
-    model="gemini-2.5-flash",
     description="Synthesizes Phase 0 analysis results to profile malware behavior, architecture, and breakpoint recommendations.",
     instruction=BEHAVIOR_PROFILE_SYNTHESIZER_INSTRUCTION,
     tools=[load_strings, load_imports, load_exports],
