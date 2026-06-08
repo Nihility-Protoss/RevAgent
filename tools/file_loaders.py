@@ -3,6 +3,204 @@ import json
 from typing import Dict, Any
 
 
+def pre_extract_sample(export_dir: str, project_name: str, output_base: str = ".") -> dict:
+    """Phase -1: Pre-extract all raw IDA export files into structured JSON.
+
+    No content filtering — only minimal cleaning (strip empty lines, fix encoding).
+    Outputs go to {output_base}/.blackboard/{project_name}/extracts/.
+    """
+    result = {"status": "success", "error": None, "extracts_dir": None}
+
+    try:
+        board_dir = os.path.join(output_base, ".blackboard", project_name)
+        extracts_dir = os.path.join(board_dir, "extracts")
+        os.makedirs(extracts_dir, exist_ok=True)
+        result["extracts_dir"] = extracts_dir
+
+        # strings.txt
+        strings_path = os.path.join(export_dir, "strings.txt")
+        if os.path.exists(strings_path):
+            _extract_strings(strings_path, extracts_dir)
+
+        # imports.txt
+        imports_path = os.path.join(export_dir, "imports.txt")
+        if os.path.exists(imports_path):
+            _extract_imports(imports_path, extracts_dir)
+
+        # exports.txt
+        exports_path = os.path.join(export_dir, "exports.txt")
+        if os.path.exists(exports_path):
+            _extract_exports(exports_path, extracts_dir)
+
+        # function_index.txt
+        func_idx_path = os.path.join(export_dir, "function_index.txt")
+        if os.path.exists(func_idx_path):
+            _extract_functions(func_idx_path, export_dir, extracts_dir)
+
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+
+    return result
+
+
+def _extract_strings(strings_path: str, extracts_dir: str) -> None:
+    """Parse IDA strings.txt into structured JSON."""
+    with open(strings_path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+
+    by_type = {"ASCII": [], "UNICODE": [], "UTF8": [], "OTHER": []}
+    by_category = {
+        "urls": [], "registry_keys": [], "file_paths": [],
+        "mutexes": [], "pdb_paths": [], "error_messages": [], "other": []
+    }
+
+    for raw in lines:
+        parts = raw.split(" | ")
+        if len(parts) >= 4:
+            addr, length, stype, text = parts[0], parts[1], parts[2], " | ".join(parts[3:])
+        else:
+            stype, text = "OTHER", raw
+
+        entry = {"text": text, "raw": raw}
+        type_key = stype if stype in by_type else "OTHER"
+        by_type[type_key].append(entry)
+
+        text_lower = text.lower()
+        if text.startswith("http://") or text.startswith("https://"):
+            by_category["urls"].append(entry)
+        elif "HKCU" in text or "HKLM" in text or "registry" in text_lower:
+            by_category["registry_keys"].append(entry)
+        elif ".pdb" in text_lower:
+            by_category["pdb_paths"].append(entry)
+        elif "Global\\" in text or "Local\\" in text:
+            by_category["mutexes"].append(entry)
+        elif any(e in text_lower for e in [".dat", ".bin", ".config", ".ini", ".dll", ".exe"]):
+            by_category["file_paths"].append(entry)
+        elif any(e in text_lower for e in ["error", "fail", "invalid", "not found", "exception"]):
+            by_category["error_messages"].append(entry)
+        else:
+            by_category["other"].append(entry)
+
+    chunk_size = 100
+    output = {
+        "total_count": len(lines),
+        "by_type": by_type,
+        "by_category": by_category,
+        "chunk_size": chunk_size,
+        "chunks": (len(lines) + chunk_size - 1) // chunk_size,
+    }
+
+    with open(os.path.join(extracts_dir, "strings_extract.json"), "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+
+def _extract_imports(imports_path: str, extracts_dir: str) -> None:
+    """Parse IDA imports.txt into structured JSON."""
+    with open(imports_path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+
+    dll_to_apis = {}
+    current_dll = "unknown"
+    imports_flat = []
+
+    for line in lines:
+        if line.lower().endswith(".dll"):
+            current_dll = line
+            dll_to_apis[current_dll] = []
+            continue
+        dll_to_apis.setdefault(current_dll, []).append(line)
+        imports_flat.append(f"{current_dll}!{line}")
+
+    output = {
+        "total_count": len(imports_flat),
+        "dll_to_apis": dll_to_apis,
+        "imports_flat": imports_flat,
+    }
+
+    with open(os.path.join(extracts_dir, "imports_extract.json"), "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+
+def _extract_exports(exports_path: str, extracts_dir: str) -> None:
+    """Parse IDA exports.txt into structured JSON."""
+    with open(exports_path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+
+    exports = []
+    for line in lines:
+        if ":" in line:
+            addr, name = line.split(":", 1)
+            exports.append({"address": addr.strip(), "name": name.strip()})
+        else:
+            exports.append({"address": None, "name": line})
+
+    output = {
+        "total_count": len(exports),
+        "exports": exports,
+    }
+
+    with open(os.path.join(extracts_dir, "exports_extract.json"), "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+
+def _extract_functions(func_idx_path: str, export_dir: str, extracts_dir: str) -> None:
+    """Parse IDA function_index.txt into structured JSON + manifest."""
+    with open(func_idx_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    functions = []
+    manifest = {}
+    blocks = content.split("=" * 80)
+
+    for block in blocks:
+        lines = [l.strip() for l in block.splitlines() if l.strip()]
+        if not lines:
+            continue
+
+        func_entry = {"name": None, "address": None, "size": 0, "xrefs_count": 0}
+
+        for line in lines:
+            if line.startswith("Function:"):
+                func_entry["name"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Address:"):
+                func_entry["address"] = line.split(":", 1)[1].strip()
+            elif line.startswith("File:"):
+                func_entry["file"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Calls ("):
+                num = line.split("(")[1].split(")")[0]
+                try:
+                    func_entry["xrefs_count"] = int(num)
+                except ValueError:
+                    pass
+
+        if func_entry["address"]:
+            functions.append(func_entry)
+            addr_clean = func_entry["address"].replace("0x", "")
+            manifest[func_entry["address"]] = {
+                "decompile": f"decompile/{addr_clean}.c" if os.path.exists(
+                    os.path.join(export_dir, "decompile", f"{addr_clean}.c")
+                ) else None,
+                "disassembly": f"disassembly/{addr_clean}.asm" if os.path.exists(
+                    os.path.join(export_dir, "disassembly", f"{addr_clean}.asm")
+                ) else None,
+            }
+
+    chunk_size = 100
+    output = {
+        "total_count": len(functions),
+        "functions": functions,
+        "chunk_size": chunk_size,
+        "chunks": (len(functions) + chunk_size - 1) // chunk_size,
+    }
+
+    with open(os.path.join(extracts_dir, "functions_extract.json"), "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    with open(os.path.join(extracts_dir, "functions_manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+
 def load_strings(file_path: str) -> Dict[str, Any]:
     """Load and categorize strings from IDA-exported strings.txt.
 
