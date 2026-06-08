@@ -1,11 +1,30 @@
+import asyncio
+import os
+import tempfile
+
 import pytest
+from google.adk.events.request_input import RequestInput
+from google.genai import types
+
 from agent import (
     root_workflow,
     root_agent,
     run_analysis,
     AnalysisTokenReport,
     StageTokenStats,
+    run_analysis_with_blackboard,
+    setup_fn,
+    setup_node,
 )
+
+
+class FakeCtx:
+    def __init__(self, state=None):
+        self.state = state or {}
+
+
+async def _collect_async(gen):
+    return [item async for item in gen]
 
 
 def test_workflow_structure():
@@ -25,7 +44,7 @@ def test_workflow_structure():
 
 def test_workflow_edges():
     """Verify workflow edges form correct graph."""
-    assert len(root_workflow.edges) == 4  # includes setup_agent edge
+    assert len(root_workflow.edges) == 4  # includes setup_fn edge
 
     edges = [(e.from_node.name, e.to_node.name) for e in root_workflow.graph.edges]
     # Setup: START -> setup
@@ -143,19 +162,13 @@ def test_stage_token_stats_add_usage():
     assert stats.call_count == 2
 
 
-import tempfile
-import os
-
-
 def test_run_analysis_with_blackboard_signature():
     """New runner should exist and be async."""
     import inspect
-    from agent import run_analysis_with_blackboard
     assert inspect.iscoroutinefunction(run_analysis_with_blackboard)
 
 
 def test_setup_fn_exists():
-    from agent import setup_fn
     from google.adk.workflow._function_node import FunctionNode
     assert isinstance(setup_fn, FunctionNode)
     assert setup_fn.name == "setup"
@@ -164,22 +177,7 @@ def test_setup_fn_exists():
 
 def test_setup_node_yields_request_input_on_first_run():
     """First run with empty state and no node_input should yield RequestInput."""
-    import asyncio
-    from agent import setup_node
-    from google.adk.events.request_input import RequestInput
-
-    class FakeCtx:
-        def __init__(self):
-            self.state = {}
-
-    async def _run():
-        gen = setup_node(FakeCtx(), node_input=None)
-        items = []
-        async for item in gen:
-            items.append(item)
-        return items
-
-    items = asyncio.run(_run())
+    items = asyncio.run(_collect_async(setup_node(FakeCtx(), node_input=None)))
     assert len(items) == 1
     assert isinstance(items[0], RequestInput)
     assert "初始化配置" in items[0].message
@@ -187,34 +185,20 @@ def test_setup_node_yields_request_input_on_first_run():
 
 
 def test_setup_node_short_circuits_when_already_configured():
-    """If state already has config, setup_node should return None immediately."""
-    import asyncio
-    from agent import setup_node
+    """If state already has config, setup_node yields nothing and completes."""
+    ctx = FakeCtx(
+        state={
+            "sample_export_dir": "D:\\analysis\\sample_001_export",
+            "sample_project_name": "sample_001",
+        }
+    )
 
-    class FakeCtx:
-        def __init__(self):
-            self.state = {
-                "sample_export_dir": "D:\\analysis\\sample_001_export",
-                "sample_project_name": "sample_001",
-            }
-
-    async def _run():
-        gen = setup_node(FakeCtx(), node_input=None)
-        items = []
-        async for item in gen:
-            items.append(item)
-        return items
-
-    items = asyncio.run(_run())
+    items = asyncio.run(_collect_async(setup_node(ctx, node_input=None)))
     assert items == []
 
 
 def test_setup_node_parses_valid_config_on_resume(tmp_path):
     """Resume with a valid user reply should write config to state and return None."""
-    import asyncio
-    from agent import setup_node
-    from google.genai import types
-
     export_dir = tmp_path / "sample_export"
     export_dir.mkdir()
 
@@ -237,20 +221,8 @@ def test_setup_node_parses_valid_config_on_resume(tmp_path):
         ],
     )
 
-    class FakeCtx:
-        def __init__(self):
-            self.state = {}
-
     ctx = FakeCtx()
-
-    async def _run_with_ctx():
-        gen = setup_node(ctx, node_input=node_input)
-        items = []
-        async for item in gen:
-            items.append(item)
-        return items
-
-    items = asyncio.run(_run_with_ctx())
+    items = asyncio.run(_collect_async(setup_node(ctx, node_input=node_input)))
     assert items == []
     assert ctx.state["sample_export_dir"] == str(export_dir)
     assert ctx.state["sample_project_name"] == "sample_001"
@@ -259,11 +231,6 @@ def test_setup_node_parses_valid_config_on_resume(tmp_path):
 
 def test_setup_node_re_requests_on_parse_failure():
     """Invalid user reply should yield a new RequestInput with an error message."""
-    import asyncio
-    from agent import setup_node
-    from google.adk.events.request_input import RequestInput
-    from google.genai import types
-
     node_input = types.Content(
         role="user",
         parts=[
@@ -277,20 +244,8 @@ def test_setup_node_re_requests_on_parse_failure():
         ],
     )
 
-    class FakeCtx:
-        def __init__(self):
-            self.state = {}
-
     ctx = FakeCtx()
-
-    async def _run():
-        gen = setup_node(ctx, node_input=node_input)
-        items = []
-        async for item in gen:
-            items.append(item)
-        return items
-
-    items = asyncio.run(_run())
+    items = asyncio.run(_collect_async(setup_node(ctx, node_input=node_input)))
     assert len(items) == 1
     assert isinstance(items[0], RequestInput)
     assert "错误" in items[0].message
@@ -300,11 +255,6 @@ def test_setup_node_re_requests_on_parse_failure():
 
 def test_setup_node_re_requests_on_missing_export_dir(tmp_path):
     """Valid-looking config pointing to a non-existent directory should re-request."""
-    import asyncio
-    from agent import setup_node
-    from google.adk.events.request_input import RequestInput
-    from google.genai import types
-
     missing_dir = tmp_path / "does_not_exist"
     user_text = f"EXPORT_DIR={missing_dir}\nPROJECT_NAME=sample_001"
 
@@ -321,20 +271,8 @@ def test_setup_node_re_requests_on_missing_export_dir(tmp_path):
         ],
     )
 
-    class FakeCtx:
-        def __init__(self):
-            self.state = {}
-
     ctx = FakeCtx()
-
-    async def _run():
-        gen = setup_node(ctx, node_input=node_input)
-        items = []
-        async for item in gen:
-            items.append(item)
-        return items
-
-    items = asyncio.run(_run())
+    items = asyncio.run(_collect_async(setup_node(ctx, node_input=node_input)))
     assert len(items) == 1
     assert isinstance(items[0], RequestInput)
     assert "does not exist" in items[0].message
