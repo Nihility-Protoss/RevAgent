@@ -1,0 +1,33 @@
+import json
+import tempfile
+import os
+import sys
+
+from tools.blackboard_tools import bb_write_summary
+
+
+def test_summary_too_large_rejected():
+    # Windows: file handles may still be open during cleanup
+    ignore_cleanup = sys.platform == "win32"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=ignore_cleanup) as tmpdir:
+        os.chdir(tmpdir)
+        os.makedirs(".blackboard/test/summary", exist_ok=True)
+
+        large = {"items": ["x" * 200 for _ in range(200)]}  # ~40k chars = ~10k tokens
+        result = bb_write_summary("too_big", large, "test")
+        assert result["status"] == "error"
+        assert "summary_too_large" in result["reason"]
+
+
+def test_state_recovery_after_worker_failure():
+    """Simulated: checkpoint exists, worker status=failed, should skip."""
+    ignore_cleanup = sys.platform == "win32"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=ignore_cleanup) as tmpdir:
+        os.chdir(tmpdir)
+        from tools.blackboard_tools import bb_checkpoint, bb_load_checkpoint, bb_log_event
+
+        bb_checkpoint("phase0_complete", "test")
+        bb_log_event("worker_failed", {"worker": "test_worker", "reason": "timeout"}, "test")
+
+        state = bb_load_checkpoint("test")
+        assert state["current_phase"] == "phase0_complete"

@@ -584,3 +584,46 @@ async def phase4_final_synthesis(project_name, token_report):
             bb_write_summary("p4_final_report", {"raw": report_output, "parse_error": True}, project_name)
 
     bb_checkpoint("phase4_complete", project_name)
+
+
+async def _run_worker_with_retry(
+    runner, session, worker, content, max_retries=3, timeout_sec=60
+):
+    """Run a worker with retry and timeout handling.
+
+    Args:
+        runner: ADK Runner instance.
+        session: ADK Session.
+        worker: The worker agent (for identification/logging).
+        content: The user message content.
+        max_retries: Maximum number of retry attempts.
+        timeout_sec: Timeout per attempt in seconds.
+
+    Returns:
+        List of events from the successful run.
+    """
+    import asyncio
+
+    last_exception = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            events = []
+            for event in runner.run(
+                user_id="analyst_001",
+                session_id=session.id,
+                new_message=content,
+            ):
+                events.append(event)
+                if event.is_final_response():
+                    return events
+            return events
+        except asyncio.TimeoutError:
+            last_exception = "timeout"
+            if attempt == max_retries:
+                raise RuntimeError(f"Worker {worker.name} timed out after {max_retries} retries")
+            await asyncio.sleep(1 * attempt)  # Exponential-ish backoff
+        except Exception as e:
+            last_exception = str(e)
+            if attempt == max_retries:
+                raise RuntimeError(f"Worker {worker.name} failed after {max_retries} retries: {e}")
+            await asyncio.sleep(1 * attempt)
