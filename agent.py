@@ -1,9 +1,13 @@
 import os
+from typing import Dict, List, Any, Optional
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-from google.adk.agents import SequentialAgent, ParallelAgent, LlmAgent
+from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.workflow._base_node import START
+from google.adk.workflow._workflow import Workflow
 from google.genai import types
 
 # Import workers
@@ -48,30 +52,6 @@ export_interface_analyzer.tools = ALL_TOOLS
 behavior_profile_synthesizer.tools = ALL_TOOLS
 function_boundary_detector.tools = ALL_TOOLS
 
-
-def _get_or_create_parallel_agent(name, sub_agents):
-    """Create a ParallelAgent, handling the case where sub-agents already have parents."""
-    try:
-        return ParallelAgent(name=name, sub_agents=sub_agents)
-    except ValueError as e:
-        if "already has a parent agent" in str(e):
-            # Agents were already added in a previous import (e.g., pytest reload).
-            # Return the existing parent from the first sub-agent.
-            return sub_agents[0].parent_agent
-        raise
-
-
-# === Phase 0: Triage Swarm ===
-phase0_triage_swarm = _get_or_create_parallel_agent(
-    "phase0_triage_swarm",
-    [string_artifact_analyst, api_behavior_profiler, export_interface_analyzer]
-)
-
-# === Phase 1: Deep Analysis Swarm ===
-phase1_deep_swarm = _get_or_create_parallel_agent(
-    "phase1_deep_swarm",
-    [behavior_profile_synthesizer, function_boundary_detector]
-)
 
 # === Phase 2: Scheduler Agent ===
 SCHEDULER_INSTRUCTION = """你是恶意样本分析系统的中央调度者。你不直接执行任何样本分析工作，你的职责是协调各个专业分析 Worker 的工作流，在关键决策点触发人工审查，并整合各 Worker 的分析结果。
@@ -128,22 +108,114 @@ scheduler_agent = LlmAgent(
     output_key="scheduler_decision",
 )
 
-def _get_or_create_sequential_agent(name, sub_agents):
-    """Create a SequentialAgent, handling the case where sub-agents already have parents."""
-    try:
-        return SequentialAgent(name=name, sub_agents=sub_agents)
-    except ValueError as e:
-        if "already has a parent agent" in str(e):
-            # Agents were already added in a previous import.
-            return sub_agents[0].parent_agent
-        raise
 
-
-# === Root Workflow ===
-root_workflow = _get_or_create_sequential_agent(
-    "malware_analysis_workflow",
-    [phase0_triage_swarm, phase1_deep_swarm, scheduler_agent]
+# === Root Workflow (using Workflow instead of deprecated ParallelAgent/SequentialAgent) ===
+root_workflow = Workflow(
+    name="malware_analysis_workflow",
+    edges=[
+        # Phase 0: Triage — 3 workers run in parallel
+        (START, (string_artifact_analyst, api_behavior_profiler, export_interface_analyzer)),
+        # Phase 1: Deep Analysis — 2 workers run in parallel after Phase 0 completes
+        ((string_artifact_analyst, api_behavior_profiler, export_interface_analyzer),
+         (behavior_profile_synthesizer, function_boundary_detector)),
+        # Phase 2: Scheduler runs after Phase 1 completes
+        ((behavior_profile_synthesizer, function_boundary_detector), scheduler_agent),
+    ]
 )
+
+
+# === Token Statistics Collector ===
+
+@dataclass
+class StageTokenStats:
+    """Token usage stats for a single stage/node."""
+    stage_name: str
+    prompt_tokens: int = 0
+    candidate_tokens: int = 0
+    total_tokens: int = 0
+    call_count: int = 0
+
+    def add_usage(self, usage_metadata: Optional[Any]) -> None:
+        """Add usage metadata from a single LLM call."""
+        if usage_metadata is None:
+            return
+        self.prompt_tokens += getattr(usage_metadata, 'promptTokenCount', 0) or 0
+        self.candidate_tokens += getattr(usage_metadata, 'candidatesTokenCount', 0) or 0
+        self.total_tokens += getattr(usage_metadata, 'totalTokenCount', 0) or 0
+        self.call_count += 1
+
+
+@dataclass
+class AnalysisTokenReport:
+    """Complete token usage report for an analysis session."""
+    sample_project_name: str
+    stages: Dict[str, StageTokenStats] = field(default_factory=dict)
+    total_prompt_tokens: int = 0
+    total_candidate_tokens: int = 0
+    total_tokens: int = 0
+    total_llm_calls: int = 0
+
+    def add_event_usage(self, event) -> None:
+        """Process an ADK Event and extract token usage."""
+        if not hasattr(event, 'usageMetadata') or event.usageMetadata is None:
+            return
+
+        # Determine stage from event node info
+        stage_name = "unknown"
+        if hasattr(event, 'nodeInfo') and event.nodeInfo:
+            stage_name = event.nodeInfo.node_name or "unknown"
+
+        if stage_name not in self.stages:
+            self.stages[stage_name] = StageTokenStats(stage_name=stage_name)
+
+        self.stages[stage_name].add_usage(event.usageMetadata)
+
+        # Update totals
+        self.total_prompt_tokens += getattr(event.usageMetadata, 'promptTokenCount', 0) or 0
+        self.total_candidate_tokens += getattr(event.usageMetadata, 'candidatesTokenCount', 0) or 0
+        self.total_tokens += getattr(event.usageMetadata, 'totalTokenCount', 0) or 0
+        self.total_llm_calls += 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize report to dict."""
+        return {
+            "sample_project_name": self.sample_project_name,
+            "total_prompt_tokens": self.total_prompt_tokens,
+            "total_candidate_tokens": self.total_candidate_tokens,
+            "total_tokens": self.total_tokens,
+            "total_llm_calls": self.total_llm_calls,
+            "stages": {
+                name: {
+                    "stage_name": s.stage_name,
+                    "prompt_tokens": s.prompt_tokens,
+                    "candidate_tokens": s.candidate_tokens,
+                    "total_tokens": s.total_tokens,
+                    "call_count": s.call_count,
+                }
+                for name, s in self.stages.items()
+            },
+        }
+
+    def __str__(self) -> str:
+        """Human-readable summary."""
+        lines = [
+            f"=== Token Usage Report: {self.sample_project_name} ===",
+            f"Total LLM Calls: {self.total_llm_calls}",
+            f"Total Prompt Tokens: {self.total_prompt_tokens:,}",
+            f"Total Candidate Tokens: {self.total_candidate_tokens:,}",
+            f"Total Tokens: {self.total_tokens:,}",
+            "",
+            "--- Per-Stage Breakdown ---",
+        ]
+        for name, stats in sorted(self.stages.items(), key=lambda x: -x[1].total_tokens):
+            lines.append(
+                f"  {stats.stage_name}: "
+                f"{stats.call_count} calls, "
+                f"{stats.total_tokens:,} tokens "
+                f"(prompt: {stats.prompt_tokens:,}, candidate: {stats.candidate_tokens:,})"
+            )
+        lines.append("")
+        return "\n".join(lines)
 
 
 # === Runtime Entry ===
@@ -151,13 +223,16 @@ def run_analysis(
     sample_export_dir: str,
     sample_project_name: str,
     sample_type: str = "auto"
-):
+) -> tuple:
     """Run the complete malware sample analysis workflow.
 
     Args:
         sample_export_dir: Path to IDA no-MCP export directory.
         sample_project_name: Sample project name for tracking.
         sample_type: File type (pe/lnk/elf/auto).
+
+    Returns:
+        Tuple of (runner, session_service, events, token_report)
     """
 
     session_service = InMemorySessionService()
@@ -188,17 +263,27 @@ def run_analysis(
         )]
     )
 
+    # Collect events and token usage
+    token_report = AnalysisTokenReport(sample_project_name=sample_project_name)
     events = []
+
     for event in runner.run(
         user_id="analyst_001",
         session_id=session.id,
         new_message=content
     ):
         events.append(event)
+
+        # Extract token usage from event
+        token_report.add_event_usage(event)
+
         if event.is_final_response():
             print(f"完成: {event.content.parts[0].text}")
 
-    return runner, session_service, events
+    # Print token report
+    print(str(token_report))
+
+    return runner, session_service, events, token_report
 
 
 # Backward compatibility: expose root_agent for ADK CLI
