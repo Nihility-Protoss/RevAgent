@@ -1,56 +1,77 @@
 from google.adk.agents import LlmAgent
 
 
-FINAL_SYNTHESIS_PROMPT = """你是恶意样本综合分析专家。你的任务是整合 phase0/1/3 的所有分析结论，生成一份最终综合分析报告。
+SHARD_SYNTHESIS_PROMPT = """你是恶意样本综合分析专家（局部分析模式）。
 
-输入数据：
-- phase0 摘要: strings / api / exports 的关键发现
-- phase1 摘要: behavior_profile（定型结论、断点矩阵）
-- phase3 摘要: 各函数深度分析结果（functionality、suspicious、key_apis）
+你的任务是基于以下输入，生成一份局部综合分析报告。
 
-分析维度：
-1. 恶意家族判定：综合所有证据给出最可能的家族/类型
-2. 行为链还原：从入口到核心功能的完整执行链
-3. 关键 IOC：URL、文件路径、注册表、互斥体
-4. 函数分析汇总：suspicious 函数数量、关键函数清单
-5. 断点矩阵：P0/P1/P2 推荐断点
-6. 不确定项：明确标注无法判断的部分
-7. 后续建议：是否需要进一步动态分析、需要关注哪些函数
+输入：
+- Phase 0/1 摘要（固定）
+- Phase 3 函数深度分析摘要（最多5个函数）
 
-输出格式（严格 JSON）：
+规则：
+1. 仅基于给定的函数摘要进行分析，不对未提供的函数做假设
+2. 标识这5个函数中的关键可疑行为和 IOC
+3. 输出格式为严格 JSON（最多2层嵌套）
+4. 如果给定函数摘要为空或全部 status=insufficient_data → 输出 status=insufficient_data
+
+输出字段：
 {
-  "malware_family": "RedLine Stealer (suspected)",
-  "confidence": "medium",
+  "shard_id": "编号",
+  "status": "success|insufficient_data",
+  "suspicious_functions_summary": ["函数地址: 关键发现"],
+  "key_iocs": {"urls": [], "files": [], "registry": []},
+  "behavior_pattern": "观察到的行为模式（仅基于这些函数）",
+  "confidence": "high|medium|low",
+  "uncertainties": ["不确定项"]
+}
+"""
+
+AGGREGATOR_PROMPT = """你是恶意样本综合分析专家（汇总模式）。
+
+你的任务是基于多个局部分析报告（shard_report），生成最终综合报告。
+
+输入：
+- N 个 shard_report
+- Phase 0/1 总体摘要
+
+规则：
+1. 仅汇总各 shard 中重复出现或相互印证的发现
+2. 如果不同 shard 的结论矛盾，在 uncertainties 中明确指出
+3. malware_family 仅当 ≥2 个 shard 一致支持时才输出具体名称，否则输出 "Unknown"
+4. confidence=high 仅当多个独立证据来源一致支持
+5. 输出格式为严格 JSON（最多2层嵌套）
+6. uncertainties 字段必须非空（至少1项）
+7. 禁止基于"常见恶意软件行为模式"进行推断
+
+输出字段：
+{
+  "status": "success|insufficient_data",
+  "malware_family": "具体家族名或 Unknown",
+  "confidence": "high|medium|low",
   "behavior_summary": "...",
-  "key_iocs": {
-    "urls": [...],
-    "files": [...],
-    "registry": [...]
-  },
-  "analyzed_functions": {
-    "total": 10,
-    "suspicious": 3,
-    "key_functions": [{"addr": "...", "functionality": "..."}]
-  },
-  "breakpoint_recommendations": {
-    "P0": [{"location": "...", "purpose": "..."}],
-    "P1": [...],
-    "P2": [...]
-  },
+  "key_iocs": {"urls": [], "files": [], "registry": []},
+  "analyzed_functions": {"total": 10, "suspicious": 3, "key_functions": []},
+  "breakpoint_recommendations": {"P0": [], "P1": [], "P2": []},
   "uncertainties": ["..."],
   "recommendations": ["..."]
 }
-
-约束：
-- 必须基于输入摘要中的实际发现，不凭空猜测
-- confidence=high 仅当多个独立证据来源一致支持
-- 输出 ≤ 1500 tokens
 """
 
 
-synthesis_agent = LlmAgent(
-    name="final_synthesis",
-    description="Aggregates all phase summaries into a final comprehensive malware analysis report.",
-    instruction=FINAL_SYNTHESIS_PROMPT,
+synthesis_shard_agent = LlmAgent(
+    name="synthesis_shard",
+    description="Performs partial synthesis on a subset of phase3 function analyses.",
+    instruction=SHARD_SYNTHESIS_PROMPT,
+    output_key="shard_report",
+)
+
+aggregator_agent = LlmAgent(
+    name="synthesis_aggregator",
+    description="Aggregates shard reports into final comprehensive malware analysis report.",
+    instruction=AGGREGATOR_PROMPT,
     output_key="final_report",
 )
+
+# Backward compatibility: keep the old name pointing to aggregator
+synthesis_agent = aggregator_agent
