@@ -215,11 +215,92 @@ setup_fn = FunctionNode(
 )
 
 
+# === Approval Gate (HITL for Phase 2→3 transition) ===
+
+APPROVAL_MESSAGE_TEMPLATE = """=== 恶意样本初步分析审查 ===
+
+行为定型: {behavior_type} (置信度: {confidence})
+高风险字符串指标: {high_risk_strings}
+高风险 API 指标: {high_risk_apis}
+候选函数: {candidate_count} / {total_funcs}
+
+请审查以上分析结论，确认：
+1. 行为定型是否合理
+2. 候选函数列表是否需要调整（排除/补充）
+3. 是否需要继续深入分析特定函数
+
+回复格式:
+- CONFIRM  (同意继续，使用推荐候选函数)
+- MODIFY <addr1>,<addr2>,...  (指定要分析的函数地址列表，逗号分隔)
+
+例如: MODIFY 0x401000,0x402000,0x403000
+"""
+
+
+def _build_review_message(state: dict) -> str:
+    """Build human-readable review message from session state."""
+    behavior_profile = state.get("behavior_profile", {})
+    string_analysis = state.get("string_analysis", {})
+    api_behavior = state.get("api_behavior_analysis", {})
+    function_boundary = state.get("function_boundary_analysis", {})
+
+    behavior_type = behavior_profile.get("behavior_profile", {}).get("primary_type", "Unknown")
+    confidence = behavior_profile.get("behavior_profile", {}).get("confidence", "low")
+
+    high_risk_strings = len([
+        s for s in string_analysis.get("suspicious_patterns", [])
+        if s.get("risk_level") == "high"
+    ])
+    high_risk_apis = len([
+        api for api in api_behavior.get("suspicious_apis", [])
+        if api.get("threat_category") in ["进程注入", "持久化", "网络通信"]
+    ])
+
+    candidates = function_boundary.get("candidates", [])[:20]
+    total_funcs = function_boundary.get("total_functions", 0)
+
+    return APPROVAL_MESSAGE_TEMPLATE.format(
+        behavior_type=behavior_type,
+        confidence=confidence,
+        high_risk_strings=high_risk_strings,
+        high_risk_apis=high_risk_apis,
+        candidate_count=len(candidates),
+        total_funcs=total_funcs,
+    )
+
+
+def _parse_approval_reply(text: str) -> tuple[str, list[str] | None]:
+    """Parse CONFIRM or MODIFY reply from human reviewer."""
+    text_stripped = text.strip().upper()
+    if text_stripped == "CONFIRM":
+        return ("confirm", None)
+    if text_stripped.startswith("MODIFY "):
+        addrs = [a.strip() for a in text_stripped[7:].split(",") if a.strip()]
+        return ("modify", addrs)
+    return ("invalid", None)
+
+
+async def approval_node(ctx: Any, node_input: Any | None = None) -> AsyncGenerator[RequestInput, None]:
+    """Yield RequestInput to collect human approval via ADK CLI HITL."""
+    error_msg = node_input if isinstance(node_input, str) else None
+    msg = _build_review_message(ctx.state)
+    if error_msg:
+        msg += f"\n\n[ERROR] 无法识别回复: {error_msg}\n请使用 CONFIRM 或 MODIFY <addr1>,<addr2>,... 格式回复。"
+    yield RequestInput(message=msg, response_schema=str)
+
+
+approval_fn = FunctionNode(
+    func=approval_node,
+    name="approval_gate",
+    rerun_on_resume=False,
+)
+
+
 # === Dynamic Workflow Orchestrator ===
 
 @node(name="analysis_orchestrator", rerun_on_resume=True)
 async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
-    """Dynamic workflow that orchestrates setup HITL -> Phase 0 -> Phase 1 -> Phase 2."""
+    """Dynamic workflow that orchestrates setup HITL -> Phase 0 -> Phase 1 -> Phase 2 -> HITL -> Phase 3 -> Phase 4."""
     import asyncio
 
     # --- Setup: collect configuration via HITL if not already present ---
@@ -242,35 +323,66 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
             except ValueError as exc:
                 error_msg = str(exc)
                 if attempt == max_attempts - 1:
-                    raise ValueError(
-                        f"Setup failed after {max_attempts} attempts: {exc}"
-                    ) from exc
+                    raise ValueError(f"Setup failed after {max_attempts} attempts: {exc}") from exc
                 continue
 
     # --- Phase 0: Triage workers in parallel ---
-    await asyncio.gather(
-        ctx.run_node(string_artifact_analyst),
-        ctx.run_node(api_behavior_profiler),
-        ctx.run_node(export_interface_analyzer),
-    )
+    if not ctx.state.get("phase0_complete"):
+        await asyncio.gather(
+            ctx.run_node(string_artifact_analyst),
+            ctx.run_node(api_behavior_profiler),
+            ctx.run_node(export_interface_analyzer),
+        )
+        ctx.state["phase0_complete"] = True
 
     # --- Phase 1: Deep analysis workers in parallel ---
-    await asyncio.gather(
-        ctx.run_node(behavior_profile_synthesizer),
-        ctx.run_node(function_boundary_detector),
-    )
+    if not ctx.state.get("phase1_complete"):
+        await asyncio.gather(
+            ctx.run_node(behavior_profile_synthesizer),
+            ctx.run_node(function_boundary_detector),
+        )
+        ctx.state["phase1_complete"] = True
 
     # --- Phase 2: Scheduler ---
-    scheduler_result = await ctx.run_node(scheduler_agent)
-    return scheduler_result
+    if not ctx.state.get("phase2_complete"):
+        scheduler_result = await ctx.run_node(scheduler_agent)
+        ctx.state["phase2_complete"] = True
+
+    # --- HITL Gate: Phase 2→3 approval ---
+    if not ctx.state.get("phase2_approved"):
+        max_approval_attempts = 3
+        approval_error = None
+        for attempt in range(max_approval_attempts):
+            user_reply = await ctx.run_node(approval_fn, node_input=approval_error)
+            if user_reply:
+                reply_text = str(user_reply).strip()
+                decision, addrs = _parse_approval_reply(reply_text)
+                if decision == "confirm":
+                    ctx.state["phase2_approved"] = True
+                    ctx.state["phase2_human_decision"] = "CONFIRM"
+                    break
+                elif decision == "modify":
+                    ctx.state["phase2_approved"] = True
+                    ctx.state["phase2_human_decision"] = reply_text
+                    ctx.state["human_approved_functions"] = addrs
+                    break
+                else:
+                    approval_error = f"无法识别回复: {reply_text}"
+                    if attempt == max_approval_attempts - 1:
+                        ctx.state["phase2_approved"] = True
+                        ctx.state["phase2_human_decision"] = "CONFIRM (default after max attempts)"
+                        break
+                    continue
+
+    return {"status": "orchestrator_checkpoint", "phase": "post_approval"}
 
 
 scheduler_agent = LlmAgent(
     name="scheduler",
     model=LLM_MODEL,
-    description="Central scheduler that coordinates analysis workers and triggers human review.",
+    description="Central scheduler that coordinates analysis workers and prepares summary for human review.",
     instruction=SCHEDULER_INSTRUCTION,
-    after_agent_callback=human_review_callback,
+    # after_agent_callback removed — HITL now handled by orchestrator approval_fn
     output_key="scheduler_decision",
 )
 
