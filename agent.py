@@ -413,7 +413,7 @@ def run_analysis(
     )
 
     runner = Runner(
-        agent=root_workflow,
+        agent=root_agent,
         app_name="malware_analysis",
         session_service=session_service
     )
@@ -457,8 +457,9 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from tools.blackboard_tools import (
-    bb_checkpoint, bb_load_checkpoint, bb_log_event,
+    bb_checkpoint, bb_has_artifact, bb_list_summaries, bb_load_checkpoint, bb_log_event,
     bb_read_extract, bb_read_summary, bb_write_artifact, bb_write_summary,
+    load_function_data,
 )
 from tools.file_loaders import pre_extract_sample
 from workers.extractor import build_extraction_prompt, extractor_agent
@@ -511,7 +512,7 @@ async def run_analysis_with_blackboard(
             "execution_status": "RUNNING",
         }
     )
-    runner = Runner(agent=root_workflow, app_name="malware_analysis", session_service=session_service)
+    runner = Runner(agent=root_agent, app_name="malware_analysis", session_service=session_service)
 
     # Phase 0/1/2: Run Workflow (Static Graph handles parallel execution)
     if state.get("current_phase") in ("pre_extract_complete", "phase0", "phase1", "phase2"):
