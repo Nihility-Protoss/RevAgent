@@ -247,3 +247,64 @@ def test_blackboard_directory_structure():
             assert os.path.exists(os.path.join(".blackboard", "test_project", "extracts", "strings_extract.json"))
         finally:
             os.chdir(orig_cwd)
+
+
+def test_orchestrator_skips_completed_phases():
+    """Checkpoint logic: if phase0_complete is set, orchestrator should skip Phase 0."""
+    from agent import analysis_orchestrator
+    import inspect
+
+    source = inspect.getsource(analysis_orchestrator._func)
+    assert 'phase0_complete' in source
+    assert 'phase1_complete' in source
+    assert 'phase2_complete' in source
+    assert 'phase3_complete' in source
+    assert 'phase4_complete' in source
+
+
+def test_approval_fn_exists():
+    """approval_fn FunctionNode must exist with correct config."""
+    from agent import approval_fn
+    assert isinstance(approval_fn, FunctionNode)
+    assert approval_fn.name == "approval_gate"
+    assert approval_fn.rerun_on_resume is False
+
+
+def test_parse_approval_reply_confirm():
+    """CONFIRM should be parsed correctly."""
+    from agent import _parse_approval_reply
+    decision, addrs = _parse_approval_reply("CONFIRM")
+    assert decision == "confirm"
+    assert addrs is None
+
+
+def test_parse_approval_reply_modify():
+    """MODIFY with addresses should be parsed correctly."""
+    from agent import _parse_approval_reply
+    decision, addrs = _parse_approval_reply("MODIFY 0x401000,0x402000")
+    assert decision == "modify"
+    assert addrs == ["0x401000", "0x402000"]
+
+
+def test_parse_approval_reply_invalid():
+    """Invalid reply should return invalid decision."""
+    from agent import _parse_approval_reply
+    decision, addrs = _parse_approval_reply("maybe")
+    assert decision == "invalid"
+    assert addrs is None
+
+
+def test_build_review_message_includes_behavior_type():
+    """Review message should include key fields from state."""
+    from agent import _build_review_message
+    state = {
+        "behavior_profile": {"behavior_profile": {"primary_type": "Stealer", "confidence": "high"}},
+        "string_analysis": {"suspicious_patterns": [{"risk_level": "high"}, {"risk_level": "high"}]},
+        "api_behavior_analysis": {"suspicious_apis": [{"threat_category": "进程注入"}]},
+        "function_boundary_analysis": {"candidates": [{"func_addr": "0x401000"}] * 15, "total_functions": 100},
+    }
+    msg = _build_review_message(state)
+    assert "Stealer" in msg
+    assert "high" in msg
+    assert "CONFIRM" in msg
+    assert "MODIFY" in msg

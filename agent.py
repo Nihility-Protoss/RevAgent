@@ -275,10 +275,10 @@ def _build_review_message(state: dict) -> str:
 
 def _parse_approval_reply(text: str) -> tuple[str, list[str] | None]:
     """Parse CONFIRM or MODIFY reply from human reviewer."""
-    text_stripped = text.strip().upper()
-    if text_stripped == "CONFIRM":
+    text_stripped = text.strip()
+    if text_stripped.upper() == "CONFIRM":
         return ("confirm", None)
-    if text_stripped.startswith("MODIFY "):
+    if text_stripped.upper().startswith("MODIFY "):
         addrs = [a.strip() for a in text_stripped[7:].split(",") if a.strip()]
         return ("modify", addrs)
     return ("invalid", None)

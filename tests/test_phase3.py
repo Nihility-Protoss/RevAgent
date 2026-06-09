@@ -30,3 +30,21 @@ def test_func_analyzer_prompt_includes_constraints():
 
 def test_function_deep_analyzer_exists():
     assert function_deep_analyzer.name == "function_deep_analyzer"
+
+
+def test_build_func_analysis_prompt_truncation():
+    """Prompt should truncate decompile/disassembly to 2500 chars and 120 lines."""
+    from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
+    long_decompile = "A" * 5000
+    long_disasm = "B" * 5000
+    func_data = {
+        "decompile_snippet": long_decompile,
+        "disassembly_snippet": long_disasm,
+        "size": 256,
+        "xrefs_in": ["0x401000"],
+        "xrefs_out": ["0x402000"],
+    }
+    prompt = build_func_analysis_prompt("0x403000", "sub_403000", func_data)
+    assert prompt.count("A") <= 2503  # 2500 from snippet + 3 from "API" in template
+    assert prompt.count("B") <= 2500
+    assert "120" in prompt
