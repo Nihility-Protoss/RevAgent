@@ -243,10 +243,16 @@ pytest -v
 
 > 以下内容基于当前代码实际状态，Agent 在修改前应特别注意。
 
-1. **`analysis_orchestrator` 与 `scheduler_agent` 的定义顺序**
+1. ~~Orchestrator 编排不完整~~ —— **已解决**（2026-06-09）：Phase 3/4 已统一编排进 `analysis_orchestrator`，支持阶段门控 checkpoint 和 HITL approval gate。
+
+2. ~~Phase 2 HITL 耦合在 after_agent_callback 中~~ —— **已解决**（2026-06-09）：HITL 已迁移到 orchestrator 内部的 `approval_fn` FunctionNode，orchestrator 完全控制 Phase 2→3 流转。
+
+3. ~~Worker 提示词幻觉风险~~ —— **已缓解**（2026-06-09）：全部 Worker 增加数据充足性检查、证据链约束、最简 schema（2层嵌套上限）、具体反幻觉规则。
+
+4. **`analysis_orchestrator` 与 `scheduler_agent` 的定义顺序**
    - `analysis_orchestrator` 函数体中引用了 `scheduler_agent`，但 `scheduler_agent` 在 `analysis_orchestrator` 之后定义。Python 函数在调用时才会解析闭包变量，所以导入阶段不会报错；但在运行到 `ctx.run_node(scheduler_agent)` 时必须确保 `scheduler_agent` 已经绑定。
 
-2. **测试的 cwd 敏感性**
+5. **测试的 cwd 敏感性**
    - 黑板测试和预提取测试会 `os.chdir(tempdir)`。Windows 下临时目录句柄可能未释放，测试里已经设置 `ignore_cleanup_errors=True`；本地运行若遇到权限错误，通常是杀毒软件或文件句柄未释放，重试即可。
 
 ---
