@@ -243,23 +243,10 @@ pytest -v
 
 > 以下内容基于当前代码实际状态，Agent 在修改前应特别注意。
 
-1. **`agent.py` 中引用了未定义的 `root_workflow`**
-   - `run_analysis()` 和 `run_analysis_with_blackboard()` 内部都使用 `Runner(agent=root_workflow, ...)`，但当前 `agent.py` 中**没有定义** `root_workflow`（也没有 `from google.adk.workflow._workflow import Workflow` 并实例化）。
-   - `__init__.py` 导出的 `root_agent = agent.root_agent`，而 `root_agent` 目前被设置为 `analysis_orchestrator`（一个 `FunctionNode` 动态编排节点），不是 `Workflow`。
-   - 因此：**当前 `run_analysis` 和 `run_analysis_with_blackboard` 在运行到 Runner 时会抛出 `NameError: name 'root_workflow' is not defined`**。
-   - 修复方向（二选一，需与产品方案对齐）：
-     - A. 在 `agent.py` 中补全 `root_workflow = Workflow(name="malware_analysis_workflow", edges=[...])`，参考 `docs/superpowers/specs/2026-06-08-dynamic-workflow-setup-hitl-design.md`。
-     - B. 将两个 runner 改为直接使用 `analysis_orchestrator` 作为 Agent，并自行在代码中驱动 Phase -1/0/1/2/3/4。
-
-2. **`analysis_orchestrator` 与 `scheduler_agent` 的定义顺序**
+1. **`analysis_orchestrator` 与 `scheduler_agent` 的定义顺序**
    - `analysis_orchestrator` 函数体中引用了 `scheduler_agent`，但 `scheduler_agent` 在 `analysis_orchestrator` 之后定义。Python 函数在调用时才会解析闭包变量，所以导入阶段不会报错；但在运行到 `ctx.run_node(scheduler_agent)` 时必须确保 `scheduler_agent` 已经绑定。
 
-3. **Phase 3 使用了未在 `agent.py` 顶部导入的函数**
-   - `phase3_function_analysis` 中使用了 `bb_has_artifact` 和 `load_function_data`，但当前 `agent.py` 顶部只从 `tools.blackboard_tools` 导入了部分函数，未导入这两个。代码中它们是直接以模块内名字使用（实际不存在），需要补充导入。
-
-4. **`bb_list_summaries` 在 `phase4_final_synthesis` 中使用，但同样未在顶部导入。**
-
-5. **测试的 cwd 敏感性**
+2. **测试的 cwd 敏感性**
    - 黑板测试和预提取测试会 `os.chdir(tempdir)`。Windows 下临时目录句柄可能未释放，测试里已经设置 `ignore_cleanup_errors=True`；本地运行若遇到权限错误，通常是杀毒软件或文件句柄未释放，重试即可。
 
 ---
