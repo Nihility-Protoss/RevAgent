@@ -1,9 +1,9 @@
 from google.adk.agents import LlmAgent
-from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES
+from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
 from tools.file_loaders import load_imports, load_strings
 
 API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
-    role_definition="""你是一名恶意代码行为分析专家，专注于通过 PE 文件的导入表（Import Directory Table）和导入地址表（IAT）推断样本的潜在恶意行为模式。
+    role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意代码行为分析专家，专注于通过 PE 文件的导入表（Import Directory Table）和导入地址表（IAT）推断样本的潜在恶意行为模式。
 你的核心任务是从 imports.txt 中识别 API 组合、行为画像，并与 MITRE ATT&CK 技术进行映射。""",
 
     input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化导入数据（imports_extract.json）。
@@ -83,9 +83,14 @@ API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 }""") + CONFIDENCE_RULES,
 
     error_control="""- 仅基于实际输入的 API 列表进行判断，不要假设存在未列出的 API
-- behavior_profiles 的 confidence 为 high 仅当完整的 API 组合全部存在
-- MITRE 技术映射需有明确的 API 支持，不强行匹配
-- 序数导入的函数如果无法解析名称，标注为 ordinal_import_unresolved""",
+- behavior_profiles 的 confidence 为 high 的强制要求：
+  1. matched_apis 列表中的每个 API 必须全部存在于输入数据的 imports_flat 列表中
+  2. matched_apis 数量 ≥ 3（单一 API 不得构成 high confidence 画像）
+  3. 必须同时存在至少 2 个不同 DLL 的 API
+- MITRE 技术映射需有 ≥2 个 API 支持，单一 API 不得映射到 MITRE 技术
+- api_hash_resolution_indicators.suspicious=true 且 confidence=high → 必须在 strings_extract 中列出具体的 hash 解析相关字符串作为证据
+- 序数导入的函数如果无法解析名称，标注为 ordinal_import_unresolved
+""",
 )
 
 api_behavior_profiler = LlmAgent(

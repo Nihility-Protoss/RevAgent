@@ -1,9 +1,9 @@
 from google.adk.agents import LlmAgent
-from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES
+from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
 from tools.file_loaders import load_exports, load_function_index
 
 EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
-    role_definition="""你是一名 Windows PE 导出表分析专家，专注于通过分析 exports.txt 和 function_index.txt 来识别样本的加载方式、命令接口和潜在恶意特征。
+    role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名 Windows PE 导出表分析专家，专注于通过分析 exports.txt 和 function_index.txt 来识别样本的加载方式、命令接口和潜在恶意特征。
 对于 DLL 插件型样本，导出表是理解其初始化方式和命令分发机制的关键。""",
 
     input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化导出数据（exports_extract.json）。
@@ -17,11 +17,15 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     analysis_dimensions="""请从以下维度进行分析：
 1. Ordinal 映射表完整性：列出所有导出 ordinal 及对应地址，标注反编译状态
 
-2. 加载方式判定（四选一）：
+2. 加载方式判定（五选一，必选其一）：
    - 标准插件型：DllMain 为纯 CRT 初始化 + 少数 ordinal 导出
    - 反射/内存加载：VirtualAlloc(RWX) + memcpy + 直接调用特征
    - 侧加载：文件名伪装成系统 DLL + 宿主 EXE 导入表引用
    - 宿主 Patch：DllMain 中使用 VirtualProtect + 内存写入
+   - 混合型|无法确定：以上四种均不完全匹配，或数据不足以明确判定
+   
+   约束：如果导出表数据不支持明确归类到前四种中的任何一种 → 必须选择"混合型|无法确定"
+   禁止在四选一不适配时强行选择最接近的选项
 
 3. TLS 回调检查：TlsCallback_0 是否在 DllMain 之前执行恶意代码
 
@@ -84,7 +88,10 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
     error_control="""- 加载方式判定中，confidence=high 仅当有明确的 ordinal 数量和命名模式支持
 - 不对缺失的导出函数进行猜测
-- 如果 exports.txt 为空或缺失，返回 loading_pattern=未知""",
+- 如果 exports.txt 为空或缺失，返回 loading_pattern=未知
+- tls_callback_analysis.has_tls_callback=true → 必须在 exports 或 function_index 中明确发现 TlsCallback 相关符号
+- packer_indicators 中每个 indicator 的 confidence=high → 必须列出具体的节名/入口点地址/entropy 值
+""",
 )
 
 export_interface_analyzer = LlmAgent(

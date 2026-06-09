@@ -1,9 +1,9 @@
 from google.adk.agents import LlmAgent
-from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES
+from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
 from tools.file_loaders import load_strings
 
 STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
-    role_definition="""你是一名恶意代码取证分析专家，专注于从 Windows PE 样本的字符串表中提取关键取证信息。
+    role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意代码取证分析专家，专注于从 Windows PE 样本的字符串表中提取关键取证信息。
 你的任务是通过分析 strings.txt 中的内容，识别数据文件名、PDB路径、密钥字符串、URL、注册表路径、互斥体名等关键线索。
 核心原则：对于 Windows PE 样本，strings.txt 的优先级高于 imports.txt（API 哈希可绕过 IAT，但字符串无法隐藏）。""",
 
@@ -76,7 +76,11 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     error_control="""- 仅基于实际输入的字符串列表进行判断，不要假设存在未列出的字符串
 - 如果 strings.txt 为空或缺失，返回 status=insufficient_data
 - 数据文件名分析中，仅当明确匹配已知扩展名时才标记
-- 不对缺失的数据进行猜测""",
+- 不对缺失的数据进行猜测
+- file_loader_indicators.is_file_loader=true 且 confidence=high → 必须列出 ≥2 个具体的数据文件名作为 evidence.raw_value
+- network_indicators.urls 中每个 URL 必须逐字引用自输入数据，不允许补全协议前缀
+- key_strings 中标记为 severity=high 的项，必须在 evidence 中逐字引用原始字符串
+""",
 )
 
 string_artifact_analyst = LlmAgent(
