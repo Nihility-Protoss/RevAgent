@@ -1,9 +1,9 @@
 from google.adk.agents import LlmAgent
-from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES
+from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
 from tools.file_loaders import load_function_index, load_exports, load_strings
 
 FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
-    role_definition="""你是一名二进制分析专家，负责评估从 PE 文件中提取的函数列表，为后续深度分析确定优先级最高的候选函数。
+    role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名二进制分析专家，负责评估从 PE 文件中提取的函数列表，为后续深度分析确定优先级最高的候选函数。
 你的任务是基于 function_index.txt 中的信息，对函数进行排序和筛选，排除低价值函数，推荐最值得深入分析的候选函数。""",
 
     input_data_description="""你将通过工具 bb_read_extract 读取预提取的函数索引摘要（functions_extract.json）。
@@ -36,8 +36,13 @@ FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 6. 导出函数优先: exports.txt 中的导出函数通常具有更高分析价值
 
 7. 综合优先级: 结合以上维度为每个函数分配 1-10 的分析优先级
-   - priority=10: xrefs>5、非thunk、size在50-1000字节、有符号名
-   - priority=1-2: thunk函数或极小函数""",
+   - priority=10: 必须同时满足：
+     a) xrefs > 5
+     b) 非 thunk
+     c) size 在 50-1000 字节范围内
+     d) 该函数的 xrefs 在所有非 thunk 函数中的排名进入前 10%
+     e) 满足 a-d 的函数总数不得超过 20 个（如超过，按 xrefs 排序取前 20）
+   - priority=1-2: thunk 函数或极小函数""",
 
     output_format=JSON_OUTPUT_RULE.format(json_schema="""{
   "total_functions": 函数总数,
@@ -73,9 +78,11 @@ FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 }""") + CONFIDENCE_RULES,
 
     error_control="""- is_thunk=true 的函数 priority 最高不超过 2
-- 推荐分析数量 recommended_top_n 不超过 20（受限于后续并行分析资源）
-- priority=10 仅当函数同时满足：xrefs>5、非thunk、size在50-1000字节范围内
-- 如果所有函数都是thunk或极小函数，标注 insufficient_interesting_functions""",
+- 推荐分析数量 recommended_top_n 不超过 20
+- priority=10 必须同时满足 xrefs>5、非 thunk、size 在 50-1000、前 10% 排名、总数 ≤20 五个条件
+- 如果所有函数都是 thunk 或极小函数，标注 insufficient_interesting_functions
+- exclusion_notes 中每个被排除的函数必须说明具体排除原因
+""",
 )
 
 function_boundary_detector = LlmAgent(

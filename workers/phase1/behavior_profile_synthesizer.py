@@ -1,9 +1,9 @@
 from google.adk.agents import LlmAgent
-from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES
+from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
 from tools.file_loaders import load_strings, load_imports, load_exports
 
 BEHAVIOR_PROFILE_SYNTHESIZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
-    role_definition="""你是一名恶意样本架构分析专家，负责综合 strings.txt、imports.txt 和 exports.txt 的分析结果，对样本进行行为定型和架构推断。
+    role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意样本架构分析专家，负责综合 strings.txt、imports.txt 和 exports.txt 的分析结果，对样本进行行为定型和架构推断。
 你的任务是基于 Phase 0 各 Worker 的输出（或直接从原始数据），判断样本属于 RAT/Stealer/Loader/Backdoor 中的哪一类，并推断其持久化机制、信息窃取模式、反调试对抗和动态断点矩阵。""",
 
     input_data_description="""你将收到以下输入：
@@ -56,6 +56,10 @@ Phase 0 分析摘要（通过 bb_read_summary 读取）：
    - P0: VirtualAlloc(RWX)、CreateThread、文件读取返回处
    - P1: 解密函数出口、命令分发器入口
    - P2: sqlite3_open、RegOpenKeyExA、OpenClipboard
+   
+   约束：
+   - 如果 address_hint 无法从输入数据（exports / function_index / strings）直接推断 → address_hint 必须为 null
+   - location 字段只允许描述性功能位置（如"DllMain 入口处"），禁止编造具体十六进制地址
 
 8. 分析 Checklist 完成状态：
    - 对照 8 步 checklist，标注已覆盖/待确认项
@@ -125,7 +129,12 @@ Phase 0 分析摘要（通过 bb_read_summary 读取）：
     error_control="""- 行为定型必须有明确的证据支持，不凭空猜测
 - 如果输入数据不足以判断某一项，明确标注为 unknown 或 insufficient_data
 - 断点矩阵建议中，地址为 null 时必须说明推断依据
-- 综合评估必须基于可验证的输入数据""",
+- 综合评估必须基于可验证的输入数据
+- behavior_profile.confidence=high → 必须同时满足：strings_summary 支持 + api_summary 支持 + exports_summary 支持（至少两个独立来源）
+- info_stealing_capabilities 中每个 target 必须有具体的 API 或字符串证据，evidence.raw_value 非空
+- execution_chain_skeleton 如果无法还原完整调用链 → 允许输出部分链并标注 "[unverified from input]"
+- 禁止基于"常见恶意软件行为模式"补全缺失环节
+""",
 )
 
 behavior_profile_synthesizer = LlmAgent(
