@@ -41,6 +41,7 @@ from tools.file_loaders import (
     detect_sample_type,
 )
 from tools.pe_utils import calculate_entropy
+from tools.blackboard_tools import bb_read_summary, bb_read_extract
 
 # Load environment variables
 load_dotenv()
@@ -54,6 +55,8 @@ ALL_TOOLS = [
     load_pe_info,
     detect_sample_type,
     calculate_entropy,
+    bb_read_summary,
+    bb_read_extract,
 ]
 
 # Bind tools to workers
@@ -374,8 +377,254 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
                         break
                     continue
 
-    return {"status": "orchestrator_checkpoint", "phase": "post_approval"}
+    # --- Phase 3: Dynamic per-function deep analysis ---
+    if not ctx.state.get("phase3_complete"):
+        # Resolve candidate functions
+        function_boundary = ctx.state.get("function_boundary_analysis", {})
+        all_candidates = function_boundary.get("candidates", [])
 
+        human_addrs = ctx.state.get("human_approved_functions")
+        if human_addrs:
+            candidates = [c for c in all_candidates if c.get("func_addr") in human_addrs]
+        else:
+            candidates = [c for c in all_candidates if c.get("analysis_priority", 0) >= 7][:20]
+
+        if not candidates:
+            ctx.state["phase3_complete"] = True
+            ctx.state["phase3_skipped_reason"] = "no_candidates"
+        else:
+            from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
+            from tools.blackboard_tools import bb_has_artifact, bb_write_artifact, bb_write_summary, bb_checkpoint
+            from tools.file_loaders import load_function_data
+            from workers.extractor import build_extraction_prompt, extractor_agent
+
+            for candidate in candidates:
+                addr = candidate.get("func_addr")
+                name = candidate.get("func_name", f"func_{addr}")
+
+                if bb_has_artifact(f"phase3_func_{addr}", ctx.state["sample_project_name"]):
+                    continue
+
+                func_data = load_function_data(addr, ctx.state["sample_export_dir"])
+                if func_data.get("status") != "success":
+                    continue
+
+                prompt = build_func_analysis_prompt(addr, name, func_data)
+                analyzer = LlmAgent(
+                    name=f"func_analyzer_{addr}",
+                    model=LLM_MODEL,
+                    instruction=prompt,
+                    output_key=f"func_analysis_{addr}",
+                )
+
+                func_session_service = InMemorySessionService()
+                func_session = func_session_service.create_session(
+                    app_name="func_analysis", user_id="system",
+                    session_id=f"func_{addr}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+                )
+                func_runner = Runner(agent=analyzer, app_name="func_analysis", session_service=func_session_service)
+                func_content = types.Content(role="user", parts=[types.Part(text=prompt)])
+
+                func_output = None
+                for event in func_runner.run(user_id="system", session_id=func_session.id, new_message=func_content):
+                    if event.is_final_response() and event.content and event.content.parts:
+                        func_output = event.content.parts[0].text
+
+                if func_output:
+                    try:
+                        artifact = json.loads(func_output)
+                    except json.JSONDecodeError:
+                        artifact = {"status": "parse_failed", "raw": func_output, "parse_error": True}
+                    bb_write_artifact(f"phase3_func_{addr}", artifact, ctx.state["sample_project_name"])
+
+                    extract_prompt = build_extraction_prompt(artifact, "function_deep")
+                    extractor_service = InMemorySessionService()
+                    extractor_session = extractor_service.create_session(
+                        app_name="extractor", user_id="system", session_id=f"extract_func_{addr}",
+                    )
+                    extractor_runner = Runner(agent=extractor_agent, app_name="extractor", session_service=extractor_service)
+                    extractor_content = types.Content(role="user", parts=[types.Part(text=extract_prompt)])
+
+                    summary_output = None
+                    for ex_event in extractor_runner.run(user_id="system", session_id=extractor_session.id, new_message=extractor_content):
+                        if ex_event.is_final_response() and ex_event.content and ex_event.content.parts:
+                            summary_output = ex_event.content.parts[0].text
+
+                    if summary_output:
+                        try:
+                            summary_data = json.loads(summary_output)
+                            bb_write_summary(f"phase3_funcs/func_{addr}", summary_data, ctx.state["sample_project_name"])
+                        except json.JSONDecodeError:
+                            pass
+
+                bb_checkpoint(f"phase3_progress_{addr}", ctx.state["sample_project_name"])
+
+            ctx.state["phase3_complete"] = True
+
+    # --- Phase 4: Final synthesis (Map-Reduce) ---
+    if not ctx.state.get("phase4_complete"):
+        project_name = ctx.state["sample_project_name"]
+
+        p0_strings = bb_read_summary("strings_summary", project_name)
+        p0_api = bb_read_summary("api_summary", project_name)
+        p0_exports = bb_read_summary("exports_summary", project_name)
+        p1_behavior = bb_read_summary("behavior_summary", project_name)
+        p1_functions = bb_read_summary("functions_summary", project_name)
+        p3_summaries = bb_list_summaries("phase3_funcs/", project_name)
+
+        # Filter to suspicious functions only, max 15
+        suspicious = [s for s in p3_summaries if s.get("suspicious_behaviors")]
+        suspicious.sort(key=lambda x: x.get("analysis_priority", 0), reverse=True)
+        suspicious = suspicious[:15]
+
+        # Map: shard analysis (sequential for small model stability)
+        shard_size = 5
+        shards = [suspicious[i:i + shard_size] for i in range(0, len(suspicious), shard_size)]
+        shard_reports = []
+
+        for idx, shard in enumerate(shards):
+            shard_context = {
+                "phase0": {
+                    "strings": p0_strings.get("data") if p0_strings.get("status") == "success" else {},
+                    "api": p0_api.get("data") if p0_api.get("status") == "success" else {},
+                    "exports": p0_exports.get("data") if p0_exports.get("status") == "success" else {},
+                },
+                "phase1": {
+                    "behavior": p1_behavior.get("data") if p1_behavior.get("status") == "success" else {},
+                    "functions": p1_functions.get("data") if p1_functions.get("status") == "success" else {},
+                },
+                "phase3_shard": shard,
+                "shard_id": idx + 1,
+            }
+
+            shard_agent = LlmAgent(
+                name=f"synthesis_shard_{idx + 1}",
+                model=LLM_MODEL,
+                instruction=SHARD_SYNTHESIS_PROMPT,
+                output_key=f"shard_report_{idx + 1}",
+            )
+            shard_session = InMemorySessionService()
+            shard_sess_obj = shard_session.create_session(
+                app_name="synthesis", user_id="system", session_id=f"shard_{idx + 1}_{project_name}",
+            )
+            shard_runner = Runner(agent=shard_agent, app_name="synthesis", session_service=shard_session)
+            shard_content = types.Content(role="user", parts=[types.Part(text=json.dumps(shard_context, ensure_ascii=False))])
+
+            shard_output = None
+            for event in shard_runner.run(user_id="system", session_id=shard_sess_obj.id, new_message=shard_content):
+                if event.is_final_response() and event.content and event.content.parts:
+                    shard_output = event.content.parts[0].text
+
+            if shard_output:
+                try:
+                    shard_reports.append(json.loads(shard_output))
+                except json.JSONDecodeError:
+                    shard_reports.append({"shard_id": idx + 1, "status": "parse_failed", "raw": shard_output})
+
+        # Reduce: aggregate all shards
+        aggregate_context = {
+            "shard_reports": shard_reports,
+            "phase0_summary": {
+                "strings": p0_strings.get("data") if p0_strings.get("status") == "success" else {},
+                "api": p0_api.get("data") if p0_api.get("status") == "success" else {},
+                "exports": p0_exports.get("data") if p0_exports.get("status") == "success" else {},
+            },
+            "phase1_summary": {
+                "behavior": p1_behavior.get("data") if p1_behavior.get("status") == "success" else {},
+            },
+        }
+
+        agg_session = InMemorySessionService()
+        agg_sess_obj = agg_session.create_session(
+            app_name="synthesis", user_id="system", session_id=f"agg_{project_name}",
+        )
+        agg_runner = Runner(agent=aggregator_agent, app_name="synthesis", session_service=agg_session)
+        agg_content = types.Content(role="user", parts=[types.Part(text=json.dumps(aggregate_context, ensure_ascii=False))])
+
+        report_output = None
+        for event in agg_runner.run(user_id="system", session_id=agg_sess_obj.id, new_message=agg_content):
+            if event.is_final_response() and event.content and event.content.parts:
+                report_output = event.content.parts[0].text
+
+        if report_output:
+            try:
+                report = json.loads(report_output)
+                bb_write_summary("p4_final_report", report, project_name)
+            except json.JSONDecodeError:
+                bb_write_summary("p4_final_report", {"status": "parse_failed", "raw": report_output}, project_name)
+
+        bb_checkpoint("phase4_complete", project_name)
+        ctx.state["phase4_complete"] = True
+
+    return {"status": "complete", "phase": "phase4_complete"}
+
+
+# === Phase 4 Map-Reduce Prompts ===
+
+SHARD_SYNTHESIS_PROMPT = """你是恶意样本综合分析专家（局部分析模式）。
+
+你的任务是基于以下输入，生成一份局部综合分析报告。
+
+输入：
+- Phase 0/1 摘要（固定）
+- Phase 3 函数深度分析摘要（最多5个函数）
+
+规则：
+1. 仅基于给定的函数摘要进行分析，不对未提供的函数做假设
+2. 标识这5个函数中的关键可疑行为和 IOC
+3. 输出格式为严格 JSON（最多2层嵌套）
+4. 如果给定函数摘要为空或全部 status=insufficient_data → 输出 status=insufficient_data
+
+输出字段：
+{
+  "shard_id": "编号",
+  "status": "success|insufficient_data",
+  "suspicious_functions_summary": ["函数地址: 关键发现"],
+  "key_iocs": {"urls": [], "files": [], "registry": []},
+  "behavior_pattern": "观察到的行为模式（仅基于这些函数）",
+  "confidence": "high|medium|low",
+  "uncertainties": ["不确定项"]
+}
+"""
+
+AGGREGATOR_PROMPT = """你是恶意样本综合分析专家（汇总模式）。
+
+你的任务是基于多个局部分析报告（shard_report），生成最终综合报告。
+
+输入：
+- N 个 shard_report
+- Phase 0/1 总体摘要
+
+规则：
+1. 仅汇总各 shard 中重复出现或相互印证的发现
+2. 如果不同 shard 的结论矛盾，在 uncertainties 中明确指出
+3. malware_family 仅当 ≥2 个 shard 一致支持时才输出具体名称，否则输出 "Unknown"
+4. confidence=high 仅当多个独立证据来源一致支持
+5. 输出格式为严格 JSON（最多2层嵌套）
+6. uncertainties 字段必须非空（至少1项）
+7. 禁止基于"常见恶意软件行为模式"进行推断
+
+输出字段：
+{
+  "status": "success|insufficient_data",
+  "malware_family": "具体家族名或 Unknown",
+  "confidence": "high|medium|low",
+  "behavior_summary": "...",
+  "key_iocs": {"urls": [], "files": [], "registry": []},
+  "analyzed_functions": {"total": 10, "suspicious": 3, "key_functions": []},
+  "breakpoint_recommendations": {"P0": [], "P1": [], "P2": []},
+  "uncertainties": ["..."],
+  "recommendations": ["..."]
+}
+"""
+
+aggregator_agent = LlmAgent(
+    name="synthesis_aggregator",
+    model=LLM_MODEL,
+    description="Aggregates shard reports into final comprehensive malware analysis report.",
+    instruction=AGGREGATOR_PROMPT,
+    output_key="final_report",
+)
 
 scheduler_agent = LlmAgent(
     name="scheduler",
