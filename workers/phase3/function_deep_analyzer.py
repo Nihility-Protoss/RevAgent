@@ -6,6 +6,14 @@ FUNC_ANALYSIS_PROMPT_TEMPLATE = """你是一个恶意样本函数级分析专家
 当前分析函数：{func_name} ({func_addr})
 函数大小：{size} bytes
 
+【数据充足性检查 —— 强约束】
+如果同时满足以下任一条件：
+- 反编译代码片段为空或仅包含 "(无反编译数据)"
+- 反汇编代码片段为空或仅包含 "(无反汇编数据)"
+- 反编译 + 反汇编总行数 < 5 行
+→ 立即返回 {{"status": "insufficient_data", "reason": "代码片段不足，无法分析", "func_addr": "{func_addr}", "func_name": "{func_name}"}}
+禁止在代码片段不足时进行任何功能推断。
+
 输入数据：
 - 反编译代码片段（截断到前 {max_lines} 行）:
 {decompile_snippet}
@@ -24,10 +32,11 @@ FUNC_ANALYSIS_PROMPT_TEMPLATE = """你是一个恶意样本函数级分析专家
 4. 与其他已分析函数的关联
 5. 置信度
 
-输出格式（严格 JSON，≤ 1000 tokens）：
+输出格式（严格 JSON，最多2层嵌套，≤ 1000 tokens）：
 {{
   "func_addr": "{func_addr}",
   "func_name": "{func_name}",
+  "status": "success|insufficient_data",
   "functionality": "...",
   "key_apis": [...],
   "suspicious_behaviors": [...],
@@ -35,6 +44,11 @@ FUNC_ANALYSIS_PROMPT_TEMPLATE = """你是一个恶意样本函数级分析专家
   "confidence": "high|medium|low",
   "analysis_notes": "..."
 }}
+
+约束：
+- confidence=high → 必须有明确的 API 调用链证据（≥2 个具体 API 名称出现在代码片段中）
+- suspicious_behaviors 中每项必须有具体的代码片段引用
+- 如果数据不足，只输出 status=insufficient_data 的最小 JSON
 """
 
 
@@ -49,9 +63,9 @@ def build_func_analysis_prompt(func_addr: str, func_name: str, func_data: dict) 
         func_addr=func_addr,
         func_name=func_name,
         size=func_data.get("size", 0),
-        max_lines=200,
-        decompile_snippet=decompile[:4000] if len(decompile) > 4000 else decompile,
-        disassembly_snippet=disasm[:4000] if len(disasm) > 4000 else disasm,
+        max_lines=120,  # Reduced from 200
+        decompile_snippet=decompile[:2500] if len(decompile) > 2500 else decompile,  # Reduced from 4000
+        disassembly_snippet=disasm[:2500] if len(disasm) > 2500 else disasm,  # Reduced from 4000
         xrefs_in=xrefs_in or ["无"],
         xrefs_out=xrefs_out or ["无"],
     )
