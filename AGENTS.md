@@ -92,7 +92,7 @@ multi_agent_adk/
 │   ├── test_phase3.py                # 函数数据加载与函数级分析器测试
 │   └── test_phase4.py                # 综合报告 Agent 测试
 ├── data/module.upx_export_for_ai/    # 示例 fixture（IDA 导出产物）
-└── docs/superpowers/                 # 设计文档与历史计划（specs + plans）
+└── docs/superpowers/                 # 设计文档与历史计划（本地保留，已移出版本控制并 gitignore）
 ```
 
 ### 3.1 Worker Agent 设计模式
@@ -267,12 +267,12 @@ pytest -v
 | 修改黑板目录结构 | `tools/blackboard_tools.py` 中的 `_board_path` 和 `_ensure_dirs` |
 | 新增样本类型（LNK/ELF） | 新增 `workers/optional/` 子 Agent，在 `detect_sample_type` 和 orchestrator 中动态加载 |
 | 修改 Token 统计字段 | `agent.py` 中的 `StageTokenStats` / `AnalysisTokenReport` |
-| 补全缺失的 Workflow | `agent.py`，参考 `docs/superpowers/specs/2026-06-08-dynamic-workflow-setup-hitl-design.md` |
+| 补全缺失的 Workflow | `agent.py`，参考 `docs/superpowers/specs/2026-06-08-dynamic-workflow-setup-hitl-design.md`（若本地存在） |
 
 ---
 
 ## 10. 参考资料
 
 - `ARCHITECTURE.md`：项目架构指南（中文），包含 Workflow 图示、Worker 职责、状态键规范、扩展路线图。
-- `docs/superpowers/specs/`：详细设计文档（黑板上下文管理、动态 Workflow + HITL、MVP 设计）。
-- `docs/superpowers/plans/`：历史实施计划，记录了代码演进的决策过程，修改前可参考以理解当前实现动机。
+- `docs/superpowers/specs/`：详细设计文档（黑板上下文管理、动态 Workflow + HITL、MVP 设计）。本地保留，已不在版本控制中，缺失时跳过即可。
+- `docs/superpowers/plans/`：历史实施计划，记录了代码演进的决策过程，修改前可参考以理解当前实现动机。同上，仅本地存在。
