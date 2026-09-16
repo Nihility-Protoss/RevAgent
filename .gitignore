@@ -26,3 +26,6 @@ venv/
 .adk/
 data/
 uv.lock
+
+# Design docs (local only, removed from history)
+docs/superpowers/
