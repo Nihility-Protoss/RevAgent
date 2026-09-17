@@ -383,3 +383,22 @@ def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch)
         f.write("{invalid")
     text = _load_active_guides_text("proj")
     assert "PE" in text
+
+
+def test_extract_arch_detection_from_dict():
+    from agent import _extract_arch_detection
+    arch = {"language": "rust", "confidence": "high"}
+    assert _extract_arch_detection({"arch_detection": arch}) == arch
+
+
+def test_extract_arch_detection_from_json_string():
+    from agent import _extract_arch_detection
+    arch = {"language": "golang", "confidence": "high"}
+    result = _extract_arch_detection('{"arch_detection": {"language": "golang", "confidence": "high"}}')
+    assert result == arch
+
+
+def test_extract_arch_detection_invalid_returns_empty():
+    from agent import _extract_arch_detection
+    assert _extract_arch_detection("not json") == {}
+    assert _extract_arch_detection(None) == {}

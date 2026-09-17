@@ -302,6 +302,26 @@ approval_fn = FunctionNode(
 )
 
 
+def _extract_arch_detection(state_value) -> dict:
+    """Extract arch_detection from a Phase 0 worker state value.
+
+    ADK stores output_key as a raw JSON string when no output_schema is
+    set, so accept dict, JSON str, or anything else (returns {}).
+    """
+    import json
+
+    if isinstance(state_value, dict):
+        return state_value.get("arch_detection") or {}
+    if isinstance(state_value, str):
+        try:
+            parsed = json.loads(state_value)
+        except Exception:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed.get("arch_detection") or {}
+    return {}
+
+
 def resolve_active_guides(project_name: str, arch_detection: dict | None = None) -> dict:
     """Resolve which knowledge guides are active for this sample.
 
@@ -431,13 +451,10 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
 
     # --- Resolve active knowledge guides from Phase 0 arch_detection ---
     if not ctx.state.get("active_guides_resolved"):
-        string_analysis = ctx.state.get("string_analysis") or {}
-        arch_detection = (
-            string_analysis.get("arch_detection")
-            if isinstance(string_analysis, dict)
-            else None
+        resolve_active_guides(
+            ctx.state["sample_project_name"],
+            arch_detection=_extract_arch_detection(ctx.state.get("string_analysis")),
         )
-        resolve_active_guides(ctx.state["sample_project_name"], arch_detection=arch_detection)
         ctx.state["active_guides_resolved"] = True
 
     # --- Phase 1: Deep analysis workers in parallel ---
