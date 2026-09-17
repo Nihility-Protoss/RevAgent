@@ -302,25 +302,30 @@ approval_fn = FunctionNode(
 )
 
 
-def resolve_active_guides(project_name: str) -> dict:
+def resolve_active_guides(project_name: str, arch_detection: dict | None = None) -> dict:
     """Resolve which knowledge guides are active for this sample.
 
-    Reads arch_detection from strings_summary, matches it against the
-    knowledge registry, and persists the result to meta/active_guides.json.
-    Never raises: on any failure falls back to the windows_pe baseline.
+    Uses the provided arch_detection when given (Phase 0 string analysis in
+    session state); otherwise reads it from strings_summary on the blackboard.
+    Matches it against the knowledge registry and persists the result to
+    meta/active_guides.json. Never raises: on any failure falls back to the
+    windows_pe baseline.
     """
     import json
     import os
 
     from workers.knowledge import KNOWLEDGE_REGISTRY, match_guides
 
-    arch: dict = {}
-    try:
-        summary = bb_read_summary("strings_summary", project_name)
-        if summary.get("status") == "success":
-            arch = (summary.get("data") or {}).get("arch_detection") or {}
-    except Exception:
+    if arch_detection is not None:
+        arch = arch_detection or {}
+    else:
         arch = {}
+        try:
+            summary = bb_read_summary("strings_summary", project_name)
+            if summary.get("status") == "success":
+                arch = (summary.get("data") or {}).get("arch_detection") or {}
+        except Exception:
+            arch = {}
 
     names = match_guides(arch)
     if not arch:
@@ -361,15 +366,18 @@ def _load_active_guides_text(project_name: str) -> str:
 
     from workers.knowledge import KNOWLEDGE_REGISTRY, load_knowledge
 
-    meta_path = os.path.join(".blackboard", project_name, "meta", "active_guides.json")
-    if not os.path.exists(meta_path):
+    def _fallback() -> str:
         result = load_knowledge("__active__", project_name)
         return result.get("content", "") if result.get("status") == "success" else ""
+
+    meta_path = os.path.join(".blackboard", project_name, "meta", "active_guides.json")
+    if not os.path.exists(meta_path):
+        return _fallback()
     try:
         with open(meta_path, "r", encoding="utf-8") as f:
             doc = json.load(f)
     except Exception:
-        return ""
+        return _fallback()
     parts = []
     for g in doc.get("guides", []):
         name = g.get("name")
@@ -378,7 +386,8 @@ def _load_active_guides_text(project_name: str) -> str:
         result = load_knowledge(name, project_name)
         if result.get("status") == "success":
             parts.append(f"=== {result['title']} ===\n{result['content']}")
-    return "\n\n".join(parts)
+    text = "\n\n".join(parts)
+    return text if text else _fallback()
 
 
 # === Dynamic Workflow Orchestrator ===
@@ -422,7 +431,13 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
 
     # --- Resolve active knowledge guides from Phase 0 arch_detection ---
     if not ctx.state.get("active_guides_resolved"):
-        resolve_active_guides(ctx.state["sample_project_name"])
+        string_analysis = ctx.state.get("string_analysis") or {}
+        arch_detection = (
+            string_analysis.get("arch_detection")
+            if isinstance(string_analysis, dict)
+            else None
+        )
+        resolve_active_guides(ctx.state["sample_project_name"], arch_detection=arch_detection)
         ctx.state["active_guides_resolved"] = True
 
     # --- Phase 1: Deep analysis workers in parallel ---

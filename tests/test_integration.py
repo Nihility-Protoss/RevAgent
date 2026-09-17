@@ -356,3 +356,30 @@ def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
     assert result["status"] == "success"
     assert [g["name"] for g in result["guides"]] == ["windows_pe"]
     assert os.path.exists(".blackboard/proj/meta/execution_log.jsonl")
+
+
+def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
+    """arch_detection passed from state must activate rust without a summary file."""
+    from agent import resolve_active_guides
+    monkeypatch.chdir(tmp_path)
+    result = resolve_active_guides(
+        "proj", arch_detection={"language": "rust", "confidence": "high"}
+    )
+    names = [g["name"] for g in result["guides"]]
+    assert names[0] == "windows_pe"
+    assert "rust" in names
+    # not relying on blackboard: no summary file exists
+    import os
+    assert not os.path.exists(".blackboard/proj/summary/strings_summary.json")
+
+
+def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch):
+    """Corrupt meta/active_guides.json must fall back to the windows_pe baseline."""
+    import os
+    from agent import _load_active_guides_text
+    monkeypatch.chdir(tmp_path)
+    os.makedirs(".blackboard/proj/meta")
+    with open(".blackboard/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
+        f.write("{invalid")
+    text = _load_active_guides_text("proj")
+    assert "PE" in text

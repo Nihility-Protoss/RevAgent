@@ -104,3 +104,24 @@ def test_load_active_reads_meta(tmp_path, monkeypatch):
     result = load_knowledge("__active__", "proj")
     assert result["guides"] == ["windows_pe", "rust"]
     assert "Rust" in result["content"]
+
+
+def test_match_guides_generic_applies_to(monkeypatch):
+    """A guide routed purely by a generic applies_to tag is matched dynamically."""
+    from pathlib import Path
+
+    from workers.knowledge import KNOWLEDGE_REGISTRY, KnowledgeMeta, match_guides
+
+    fake = KnowledgeMeta(
+        name="python_guide",
+        title="Python 样本静态分析方法论",
+        source="",
+        applies_to=["language:python"],
+        priority=70,
+        max_tokens=1200,
+        path=Path("python_guide.md"),
+    )
+    monkeypatch.setitem(KNOWLEDGE_REGISTRY, "python_guide", fake)
+
+    assert "python_guide" in match_guides({"language": "python", "confidence": "high"})
+    assert "python_guide" not in match_guides({"language": "rust", "confidence": "high"})

@@ -128,26 +128,36 @@ def _load_active(project_name: str) -> dict:
 
 
 def match_guides(arch_detection: dict) -> list:
-    """Map an arch_detection dict to active guide names.
+    """Map an arch_detection dict to active guide names via applies_to tags.
 
-    windows_pe is always included as the baseline. Language/form-specific
-    guides are only activated when confidence is not low.
+    Baseline guides (applies_to contains "baseline", e.g. windows_pe) are
+    always included. Other guides declare "key:value" tags where key is an
+    arch_detection field (e.g. language, sample_form); the guide is included
+    when that field matches value (case-insensitive). When confidence is low
+    (or unset), only baseline guides are active.
     """
     arch = arch_detection or {}
-    language = str(arch.get("language") or "unknown").lower()
-    sample_form = str(arch.get("sample_form") or "").lower()
     confidence = str(arch.get("confidence") or "low").lower()
 
-    names = [_DEFAULT_GUIDE]
-    if confidence != "low":
-        if language == "c_cpp":
-            names.append("cpp")
-        elif language == "rust":
-            names.append("rust")
-        elif language == "golang":
-            names.append("golang")
-        if sample_form == "exe_file_loader":
-            names.append("file_loader_triage")
+    names = []
+    for name, meta in KNOWLEDGE_REGISTRY.items():
+        tags = meta.applies_to or []
+        if "baseline" in tags:
+            names.append(name)
+            continue
+        if confidence == "low":
+            continue
+        for tag in tags:
+            key, sep, value = tag.partition(":")
+            if not sep:
+                continue
+            arch_value = str(arch.get(key) or "").lower()
+            if arch_value and arch_value == value.strip().lower():
+                names.append(name)
+                break
+
+    if not names:
+        names = [_DEFAULT_GUIDE]
 
     ordered = sorted(
         (KNOWLEDGE_REGISTRY[n] for n in names if n in KNOWLEDGE_REGISTRY),
