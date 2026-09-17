@@ -39,3 +39,10 @@ def test_all_registered_files_respect_token_budget():
         assert _estimate_tokens(text) <= meta.max_tokens, (
             f"knowledge file {name} exceeds token budget"
         )
+
+
+def test_registry_contains_language_guides():
+    from workers.knowledge import KNOWLEDGE_REGISTRY
+    for name in ("cpp", "rust"):
+        assert name in KNOWLEDGE_REGISTRY
+        assert KNOWLEDGE_REGISTRY[name].priority == 90
