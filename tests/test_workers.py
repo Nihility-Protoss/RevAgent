@@ -76,3 +76,10 @@ def test_string_analyst_has_arch_detection():
     assert "compiler_hints" in string_artifact_analyst.instruction
     assert "sample_form" in string_artifact_analyst.instruction
     assert "/rustc/" in string_artifact_analyst.instruction
+
+
+def test_phase0_secondary_analysts_mention_arch_evidence():
+    from workers.phase0.api_behavior_profiler import api_behavior_profiler
+    from workers.phase0.export_interface_analyzer import export_interface_analyzer
+    for w in (api_behavior_profiler, export_interface_analyzer):
+        assert "编译语言" in w.instruction, f"{w.name} missing arch evidence hint"

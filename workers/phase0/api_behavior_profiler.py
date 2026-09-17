@@ -34,7 +34,9 @@ API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
 4. 序数导入：通过序号而非名称导入的函数（尤其是 ntdll 中的函数）可能是试图隐藏 API 调用的迹象
 
-5. 导入表整体健康度：评估 IAT 是否过于"干净"（可能是 API 哈希动态解析的反向指标）""",
+5. 导入表整体健康度：评估 IAT 是否过于"干净"（可能是 API 哈希动态解析的反向指标）
+
+若分析过程中发现与编译语言、加壳/保护方式或样本形态（EXE 文件加载型 / DLL 插件型）相关的证据（如异常稀疏的导入表、Install/ServiceMain 类导出、保护壳特征 API），请在结论的相应字段或 notes 中注明并附证据；无需输出独立结构。""",
 
     output_format=JSON_OUTPUT_RULE.format(json_schema="""{
   "total_imported_dlls": 数量,

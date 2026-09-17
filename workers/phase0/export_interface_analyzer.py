@@ -36,7 +36,9 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 6. 命令接口推断：如果是 DLL 插件型，推断 ordinal 命令分发器接口：
    - ordinal_1 可能为初始化函数（dll_initialize）
    - ordinal_2+ 可能为命令处理函数
-   - 分析回调参数语义（rcx=主回调地址, rdx=字符串处理回调等）""",
+   - 分析回调参数语义（rcx=主回调地址, rdx=字符串处理回调等）
+
+若分析过程中发现与编译语言、加壳/保护方式或样本形态（EXE 文件加载型 / DLL 插件型）相关的证据（如异常稀疏的导入表、Install/ServiceMain 类导出、保护壳特征 API），请在结论的相应字段或 notes 中注明并附证据；无需输出独立结构。""",
 
     output_format=JSON_OUTPUT_RULE.format(json_schema="""{
   "loading_pattern": {
