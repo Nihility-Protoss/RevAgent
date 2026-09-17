@@ -104,3 +104,32 @@ def test_persist_worker_output_coerces_json_string(monkeypatch):
     ))
     assert captured["artifact"] == {"findings": ["a"]}
     assert captured["prompt_artifact"] == {"findings": ["a"]}
+
+
+def test_phase3_boundary_coercion_pattern():
+    """Regression for the orchestrator Phase 3 consumption point:
+    `function_boundary = coerce_state_dict(ctx.state.get("function_boundary_analysis"))`.
+
+    ADK may store the Function Boundary Detector output_key as a raw JSON string;
+    the coerced value must be a dict whose `candidates` is a list of dict-like items
+    so `.get("candidates")` and per-item `.get(...)` do not crash.
+    """
+    from tools.state_utils import coerce_state_dict
+
+    state = {
+        "function_boundary_analysis": json.dumps({
+            "total_functions": 100,
+            "candidates": [
+                {"address": "0x401000", "score": 9.5, "reason": "entry"},
+                {"address": "0x402000", "score": 8.0, "reason": "xref"},
+            ],
+        })
+    }
+
+    function_boundary = coerce_state_dict(state.get("function_boundary_analysis"))
+    assert isinstance(function_boundary, dict)
+    candidates = function_boundary.get("candidates", [])
+    assert isinstance(candidates, list)
+    assert len(candidates) == 2
+    assert all(c.get("address") for c in candidates)
+    assert candidates[0].get("address") == "0x401000"

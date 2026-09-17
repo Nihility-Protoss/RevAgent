@@ -32,11 +32,11 @@
 
 ### 2.2 模型配置
 
-运行时通过 `.env` 读取（文件被 gitignore，不要在仓库中提交）：
+运行时通过 `.env` 读取（文件被 gitignore，不要在仓库中提交）。代码实际读取以下环境变量（`.env` 中可配置任意 OpenAI 兼容端点）：
 
-- `MOONSHOT_API_KEY`（必填）
-- `MOONSHOT_BASE_URL`（默认 `https://api.moonshot.cn/v1`）
-- `MOONSHOT_MODEL`（默认 `openai/kimi-k2.5`，代码里会自动补 `openai/` 前缀以适配 `LiteLlm`）
+- `API_KEY`（必填）
+- `BASE_URL`（默认 `https://api.deepseek.com/v1`）
+- `MODEL`（默认 `deepseek-flash`，代码里会自动补 `openai/` 前缀以适配 `LiteLlm`）
 
 `agent.py` 使用 `google.adk.models.lite_llm.LiteLlm` 包装为 OpenAI 兼容调用。ADK 某些内部行为可能仍需要 `GOOGLE_API_KEY`，若报错请补充。
 
@@ -84,7 +84,7 @@ multi_agent_adk/
 │   └── phase4/
 │       └── synthesis_agent.py
 ├── callbacks/
-│   └── human_review.py               # Phase 2 完成后触发的人工审查回调
+│   └── human_review.py               # 人工审查回调（历史模块，当前未被装配；HITL 由 orchestrator 内 approval_fn 负责）
 ├── tests/                            # 测试集
 │   ├── test_tools.py                 # file_loaders / pe_utils 单元测试
 │   ├── test_workers.py               # Worker 存在性与 output_key 测试
@@ -143,9 +143,9 @@ pip install -e .
 创建 `.env`（已 gitignore，勿提交）：
 
 ```env
-MOONSHOT_API_KEY=your_key_here
-MOONSHOT_BASE_URL=https://api.moonshot.cn/v1
-MOONSHOT_MODEL=kimi-k2.5
+API_KEY=your_key_here
+BASE_URL=https://api.deepseek.com/v1
+MODEL=deepseek-flash
 ```
 
 ### 4.2 运行方式

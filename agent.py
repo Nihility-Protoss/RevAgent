@@ -30,7 +30,7 @@ from workers.extractor import build_extraction_prompt, extractor_agent
 
 
 # === Runtime Entry ===
-def run_analysis(
+async def run_analysis(
     sample_export_dir: str,
     sample_project_name: str,
     sample_type: str = "auto"
@@ -48,7 +48,7 @@ def run_analysis(
 
     session_service = InMemorySessionService()
 
-    session = session_service.create_session(
+    session = await session_service.create_session(
         app_name="malware_analysis",
         user_id="analyst_001",
         session_id=f"analysis_{sample_project_name}",
@@ -133,7 +133,7 @@ async def run_analysis_with_blackboard(
 
     # Setup ADK session for Workflow
     session_service = InMemorySessionService()
-    session = session_service.create_session(
+    session = await session_service.create_session(
         app_name="malware_analysis",
         user_id="analyst_001",
         session_id=f"analysis_{sample_project_name}",
@@ -147,7 +147,8 @@ async def run_analysis_with_blackboard(
     )
     runner = Runner(agent=root_agent, app_name="malware_analysis", session_service=session_service)
 
-    # Phase 0/1/2: run the workflow (parallel fan-out is declared in workers/orchestrator's edges);
+    # Phase 0/1/2: run the workflow. Each worker runs as its own ADK session inside
+    # workers/orchestrator (Phase 0/1 fan-out via asyncio.gather, not Workflow edges);
     # worker outputs are then persisted to the blackboard below.
     if state.get("current_phase") in ("pre_extract_complete", "phase0", "phase1", "phase2"):
         # Worker agents are assembled in workers/orchestrator; import here to keep

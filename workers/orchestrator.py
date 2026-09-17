@@ -537,7 +537,7 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
 
     # --- Phase 2: Scheduler ---
     if not ctx.state.get("phase2_complete"):
-        scheduler_result = await ctx.run_node(scheduler_agent)
+        await ctx.run_node(scheduler_agent)
         ctx.state["phase2_complete"] = True
 
     # --- HITL Gate: Phase 2→3 approval ---
@@ -614,7 +614,7 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
                 )
 
                 func_session_service = InMemorySessionService()
-                func_session = func_session_service.create_session(
+                func_session = await func_session_service.create_session(
                     app_name="func_analysis", user_id="system",
                     session_id=f"func_{addr}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
                 )
@@ -635,7 +635,7 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
 
                     extract_prompt = build_extraction_prompt(artifact, "function_deep")
                     extractor_service = InMemorySessionService()
-                    extractor_session = extractor_service.create_session(
+                    extractor_session = await extractor_service.create_session(
                         app_name="extractor", user_id="system", session_id=f"extract_func_{addr}",
                     )
                     extractor_runner = Runner(agent=extractor_agent, app_name="extractor", session_service=extractor_service)
@@ -700,7 +700,7 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
                 output_key=f"shard_report_{idx + 1}",
             )
             shard_session = InMemorySessionService()
-            shard_sess_obj = shard_session.create_session(
+            shard_sess_obj = await shard_session.create_session(
                 app_name="synthesis", user_id="system", session_id=f"shard_{idx + 1}_{project_name}",
             )
             shard_runner = Runner(agent=shard_agent, app_name="synthesis", session_service=shard_session)
@@ -731,7 +731,7 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
         }
 
         agg_session = InMemorySessionService()
-        agg_sess_obj = agg_session.create_session(
+        agg_sess_obj = await agg_session.create_session(
             app_name="synthesis", user_id="system", session_id=f"agg_{project_name}",
         )
         agg_runner = Runner(agent=aggregator_agent, app_name="synthesis", session_service=agg_session)

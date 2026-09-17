@@ -61,7 +61,7 @@
 │  │   │  Scheduler Agent                                              │   │
 │  │   │  - 读取5个Worker输出                                         │   │
 │  │   │  - 整合摘要 → output_key: scheduler_decision                │   │
-│  │   │  - after_agent_callback → 触发人工审查暂停                  │   │
+│  │   │  - orchestrator 内 approval_fn → 触发人工审查暂停           │   │
 │  │   └──────────────────────────────────────────────────────────┘   │
 │  └────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
@@ -148,10 +148,12 @@ root_workflow = Workflow(
 - **HITL**: 由 orchestrator 内的 `approval_fn` FunctionNode 负责（暂停等待人工审查）
 - **规则**: 只做数据路由和状态管理，不做样本分析推理
 
-#### Human Review Callback
-- **触发时机**: Phase 2 完成后（`analysis_phase == "initial_complete"`）
+#### Human Review Gate (approval_fn)
+
+- **位置**: `workers/orchestrator.py` 内的 `approval_fn` FunctionNode（Phase 2→3 之间），非 `callbacks/` 模块
+- **触发时机**: Phase 2 Scheduler 完成后（`phase2_approved` 未置位时）
 - **审查内容**: 行为定型结论、高风险发现摘要、Top 20 候选函数、Checklist 完成状态
-- **输出状态**: `execution_status = "WAITING_FOR_APPROVAL"`
+- **输出状态**: `phase2_approved`（bool）、`phase2_human_decision`（原始决策文本）、`human_approved_functions`（人工补充/修正的函数地址）
 - **回复格式**: `CONFIRM` 或 `MODIFY [具体修正内容]`
 
 ### 3.4 知识指南注入（Phase 0→1 门控）
@@ -206,9 +208,12 @@ Agent 接收一个**样本导出目录**作为输入：
 | `sample_project_name` | str | Runner 初始化 | Token Report |
 | `sample_export_dir` | str | Runner 初始化 | FunctionTool |
 | `sample_type` | str | Runner 初始化 | — |
-| `analysis_phase` | str | 调度者 | 回调函数 |
-| `execution_status` | str | 调度者/回调 | 外部接口 |
-| `pending_human_review` | dict | 回调 | 外部审查接口 |
+| `analysis_phase` | str | approval_fn / orchestrator | 外部接口 |
+| `execution_status` | str | 调度者/approval_fn | 外部接口 |
+| `pending_human_review` | dict | approval_fn | 外部审查接口 |
+| `phase2_approved` | bool | approval_fn | orchestrator Phase 3 门控 |
+| `phase2_human_decision` | str | approval_fn | 外部审查接口 |
+| `human_approved_functions` | list | approval_fn | orchestrator Phase 3 |
 
 **Worker 输出键**：
 

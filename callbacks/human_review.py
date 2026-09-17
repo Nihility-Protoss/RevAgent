@@ -4,6 +4,8 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmResponse
 from google.genai import types
 
+from tools.state_utils import coerce_state_dict
+
 
 async def human_review_callback(
     callback_context: CallbackContext,
@@ -25,12 +27,12 @@ async def human_review_callback(
 async def _trigger_initial_review(state: Dict[str, Any]) -> LlmResponse:
     """Trigger initial analysis review after Phase 0 + Phase 1 complete."""
 
-    # Collect all worker outputs
-    string_analysis = state.get("string_analysis", {})
-    api_behavior = state.get("api_behavior_analysis", {})
-    export_interface = state.get("export_interface_analysis", {})
-    behavior_profile = state.get("behavior_profile", {})
-    function_boundary = state.get("function_boundary_analysis", {})
+    # Collect all worker outputs (ADK may store output_key as a raw JSON string)
+    string_analysis = coerce_state_dict(state.get("string_analysis"))
+    api_behavior = coerce_state_dict(state.get("api_behavior_analysis"))
+    export_interface = coerce_state_dict(state.get("export_interface_analysis"))
+    behavior_profile = coerce_state_dict(state.get("behavior_profile"))
+    function_boundary = coerce_state_dict(state.get("function_boundary_analysis"))
 
     # Extract key findings
     behavior_type = behavior_profile.get("behavior_profile", {}).get("primary_type", "Unknown")
