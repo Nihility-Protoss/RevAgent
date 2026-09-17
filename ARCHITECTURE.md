@@ -145,7 +145,7 @@ root_workflow = Workflow(
 #### Scheduler Agent
 - **职责**: 中央协调器，读取 5 个 Worker 输出，整合摘要，触发人工审查
 - **输出键**: `scheduler_decision`
-- **回调**: `after_agent_callback=human_review_callback`
+- **HITL**: 由 orchestrator 内的 `approval_fn` FunctionNode 负责（暂停等待人工审查）
 - **规则**: 只做数据路由和状态管理，不做样本分析推理
 
 #### Human Review Callback
@@ -365,8 +365,10 @@ runner, session_service, events, token_report = run_analysis(
 ### 9.2 ADK CLI
 
 ```bash
-# 设置 API Key
-export GOOGLE_API_KEY="your-key"
+# 设置模型访问环境变量
+export MODEL="<model-name>"
+export API_KEY="your-key"
+export BASE_URL="https://api.deepseek.com/v1"
 
 # 使用 ADK CLI 运行
 adk run agent
@@ -375,5 +377,5 @@ adk run agent
 ### 9.3 环境要求
 
 - Python 3.10+
-- Google API Key（Gemini 模型访问）
+- 模型访问环境变量（`MODEL` / `API_KEY` / `BASE_URL`，代码实际读取）
 - IDA 无 MCP 导出目录（strings.txt, exports.txt, imports.txt, function_index.txt）

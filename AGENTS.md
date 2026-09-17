@@ -94,7 +94,9 @@ multi_agent_adk/
 │   ├── test_fault_tolerance.py       # 容错与摘要大小限制测试
 │   ├── test_pre_extract.py           # Phase -1 预提取测试
 │   ├── test_phase3.py                # 函数数据加载与函数级分析器测试
-│   └── test_phase4.py                # 综合报告 Agent 测试
+│   ├── test_phase4.py                # 综合报告 Agent 测试
+│   ├── test_knowledge.py             # 知识库注册表 / __active__ 解析 / match_guides 路由测试
+│   └── test_state_coercion.py        # Session State 解析辅助（coerce_state_dict 等）测试
 ├── data/module.upx_export_for_ai/    # 示例 fixture（IDA 导出产物）
 └── docs/superpowers/                 # 设计文档与历史计划（本地保留，已移出版本控制并 gitignore）
 ```
@@ -117,7 +119,7 @@ multi_agent_adk/
 - **知识指南门控（Phase 0→1）**：Phase 0 字符串分析输出 `arch_detection`；orchestrator 的 `resolve_active_guides` 据此匹配知识库并写入 `meta/active_guides.json`。Phase 1 经 `load_arch_guide("__active__")` 按需加载，Phase 3 注入动态 Analyzer prompt。
 - **Extractor Agent** 将 artifact 提炼为 `summary/{strings,api,exports}_summary.json`（硬约束 ≤1500 tokens）。
 - **Phase 1 Worker** 读取 `summary/` + `extracts/` → 输出 `artifacts/p1_*_{timestamp}.json` → 再提炼为 `summary/`。
-- **Phase 2 Scheduler** 读取 summary，生成决策并触发 `human_review_callback`。
+- **Phase 2 Scheduler** 读取 summary，生成决策；HITL 由 orchestrator 内的 `approval_fn` FunctionNode 负责（暂停等待人工审查）。
 - **Phase 3** 从 `summary/p2_decision.json` 读取待分析函数队列，逐个调用 `load_function_data` 加载反编译/反汇编片段，动态创建 Analyzer Agent，结果存入 `artifacts/phase3_func_{addr}.json` 和 `summary/phase3_funcs/`。
 - **Phase 4** 读取所有 summary，生成 `summary/p4_final_report.json`。
 
@@ -264,13 +266,13 @@ pytest -v
 
 | 需求 | 推荐修改位置 |
 |------|-------------|
-| 新增一个 Phase 0 Worker | `workers/phase0/` 新增模块，在 `agent.py` 导入并加入 Workflow edges |
+| 新增一个 Phase 0 Worker | `workers/phase0/` 新增模块，在 `workers/orchestrator.py` 导入并加入 Workflow edges |
 | 调整 Worker 提示词 | 直接修改对应 `workers/phaseX/xxx.py` 中的 `INSTRUCTION` |
-| 新增文件加载 Tool | `tools/file_loaders.py`，注册到 `agent.py` 的 `ALL_TOOLS` |
+| 新增文件加载 Tool | `tools/file_loaders.py`，注册到 `workers/orchestrator.py` 的 `ALL_TOOLS` |
 | 修改黑板目录结构 | `tools/blackboard_tools.py` 中的 `_board_path` 和 `_ensure_dirs` |
 | 新增样本类型（LNK/ELF） | 新增 `workers/optional/` 子 Agent，在 `detect_sample_type` 和 orchestrator 中动态加载 |
 | 修改 Token 统计字段 | `tools/token_stats.py` 中的 `StageTokenStats` / `AnalysisTokenReport` |
-| 补全缺失的 Workflow | `agent.py`，参考 `docs/superpowers/specs/2026-06-08-dynamic-workflow-setup-hitl-design.md`（若本地存在） |
+| 补全缺失的 Workflow | `workers/orchestrator.py`，参考 `docs/superpowers/specs/2026-06-08-dynamic-workflow-setup-hitl-design.md`（若本地存在） |
 
 ---
 
