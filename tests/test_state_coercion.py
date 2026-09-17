@@ -50,3 +50,18 @@ def test_extract_arch_detection_invalid_returns_empty():
     assert extract_arch_detection("not json") == {}
     assert extract_arch_detection(None) == {}
     assert extract_arch_detection({"no_arch_key": 1}) == {}
+
+
+def test_build_review_message_handles_json_string_state():
+    """Regression: ADK stores output_key as raw JSON string; must not crash."""
+    from workers.orchestrator import _build_review_message
+    state = {
+        "behavior_profile": '{"behavior_profile": {"primary_type": "Stealer", "confidence": "high"}}',
+        "string_analysis": '{"suspicious_patterns": [{"risk_level": "high"}, {"risk_level": "high"}]}',
+        "api_behavior_analysis": '{"suspicious_apis": [{"threat_category": "进程注入"}]}',
+        "function_boundary_analysis": '{"candidates": [], "total_functions": 100}',
+    }
+    msg = _build_review_message(state)
+    assert "Stealer" in msg
+    assert "high" in msg
+    assert "CONFIRM" in msg
