@@ -354,6 +354,33 @@ def resolve_active_guides(project_name: str) -> dict:
     return doc
 
 
+def _load_active_guides_text(project_name: str) -> str:
+    """Concatenate full text of all active guides for prompt injection."""
+    import json
+    import os
+
+    from workers.knowledge import KNOWLEDGE_REGISTRY, load_knowledge
+
+    meta_path = os.path.join(".blackboard", project_name, "meta", "active_guides.json")
+    if not os.path.exists(meta_path):
+        result = load_knowledge("__active__", project_name)
+        return result.get("content", "") if result.get("status") == "success" else ""
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except Exception:
+        return ""
+    parts = []
+    for g in doc.get("guides", []):
+        name = g.get("name")
+        if name not in KNOWLEDGE_REGISTRY:
+            continue
+        result = load_knowledge(name, project_name)
+        if result.get("status") == "success":
+            parts.append(f"=== {result['title']} ===\n{result['content']}")
+    return "\n\n".join(parts)
+
+
 # === Dynamic Workflow Orchestrator ===
 
 @node(name="analysis_orchestrator", rerun_on_resume=True)
@@ -458,6 +485,8 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
             from tools.file_loaders import load_function_data
             from workers.extractor import build_extraction_prompt, extractor_agent
 
+            guides_text = _load_active_guides_text(ctx.state["sample_project_name"])
+
             for candidate in candidates:
                 addr = candidate.get("func_addr")
                 name = candidate.get("func_name", f"func_{addr}")
@@ -469,11 +498,16 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
                 if func_data.get("status") != "success":
                     continue
 
-                prompt = build_func_analysis_prompt(addr, name, func_data)
+                prompt = build_func_analysis_prompt(
+                    addr, name, func_data,
+                    guides=guides_text,
+                    project_name=ctx.state["sample_project_name"],
+                )
                 analyzer = LlmAgent(
                     name=f"func_analyzer_{addr}",
                     model=LLM_MODEL,
                     instruction=prompt,
+                    tools=[load_arch_guide],
                     output_key=f"func_analysis_{addr}",
                 )
 

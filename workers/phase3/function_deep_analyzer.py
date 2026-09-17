@@ -52,14 +52,26 @@ FUNC_ANALYSIS_PROMPT_TEMPLATE = """你是一个恶意样本函数级分析专家
 """
 
 
-def build_func_analysis_prompt(func_addr: str, func_name: str, func_data: dict) -> str:
-    """Build analysis prompt for a single function."""
+def build_func_analysis_prompt(
+    func_addr: str,
+    func_name: str,
+    func_data: dict,
+    guides: str = "",
+    project_name: str = "",
+) -> str:
+    """Build analysis prompt for a single function.
+
+    When guides is provided, the active knowledge methodology is appended so
+    the analyzer can follow architecture-specific analysis rules. When
+    project_name is provided, it is appended so the analyzer can pass it to the
+    load_arch_guide tool.
+    """
     decompile = func_data.get("decompile_snippet") or "(无反编译数据)"
     disasm = func_data.get("disassembly_snippet") or "(无反汇编数据)"
     xrefs_in = func_data.get("xrefs_in", [])
     xrefs_out = func_data.get("xrefs_out", [])
 
-    return FUNC_ANALYSIS_PROMPT_TEMPLATE.format(
+    prompt = FUNC_ANALYSIS_PROMPT_TEMPLATE.format(
         func_addr=func_addr,
         func_name=func_name,
         size=func_data.get("size", 0),
@@ -69,6 +81,19 @@ def build_func_analysis_prompt(func_addr: str, func_name: str, func_data: dict) 
         xrefs_in=xrefs_in or ["无"],
         xrefs_out=xrefs_out or ["无"],
     )
+
+    # 依据样本架构自动注入的专项分析方法论，优先于通用分析要求遵循
+    if guides:
+        prompt += (
+            "\n\n## 专项分析方法论（依据样本架构自动注入，优先遵循）\n"
+            + guides
+        )
+    if project_name:
+        prompt += (
+            f"\n\n当前黑板项目名：{project_name}"
+            "（如需调用 load_arch_guide 工具，project_name 参数填此值。）"
+        )
+    return prompt
 
 
 function_deep_analyzer = LlmAgent(
