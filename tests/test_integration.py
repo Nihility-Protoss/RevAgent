@@ -308,3 +308,51 @@ def test_build_review_message_includes_behavior_type():
     assert "high" in msg
     assert "CONFIRM" in msg
     assert "MODIFY" in msg
+
+
+def test_resolve_active_guides_rust(tmp_path, monkeypatch):
+    """arch_detection=rust/high activates rust guide; meta file written."""
+    import json
+    import os
+    from agent import resolve_active_guides
+    monkeypatch.chdir(tmp_path)
+    os.makedirs(".blackboard/proj/summary")
+    with open(".blackboard/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {"arch_detection": {"language": "rust", "confidence": "high"}},
+            f,
+        )
+    result = resolve_active_guides("proj")
+    assert result["status"] == "success"
+    with open(".blackboard/proj/meta/active_guides.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    names = [g["name"] for g in meta["guides"]]
+    assert names[0] == "windows_pe"
+    assert "rust" in names
+
+
+def test_resolve_active_guides_low_confidence_defaults(tmp_path, monkeypatch):
+    import json
+    import os
+    from agent import resolve_active_guides
+    monkeypatch.chdir(tmp_path)
+    os.makedirs(".blackboard/proj/summary")
+    with open(".blackboard/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {"arch_detection": {"language": "unknown", "confidence": "low"}},
+            f,
+        )
+    result = resolve_active_guides("proj")
+    assert [g["name"] for g in result["guides"]] == ["windows_pe"]
+
+
+def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
+    """Missing strings_summary must not break the pipeline; default + log."""
+    import json
+    import os
+    from agent import resolve_active_guides
+    monkeypatch.chdir(tmp_path)
+    result = resolve_active_guides("proj")
+    assert result["status"] == "success"
+    assert [g["name"] for g in result["guides"]] == ["windows_pe"]
+    assert os.path.exists(".blackboard/proj/meta/execution_log.jsonl")

@@ -302,6 +302,58 @@ approval_fn = FunctionNode(
 )
 
 
+def resolve_active_guides(project_name: str) -> dict:
+    """Resolve which knowledge guides are active for this sample.
+
+    Reads arch_detection from strings_summary, matches it against the
+    knowledge registry, and persists the result to meta/active_guides.json.
+    Never raises: on any failure falls back to the windows_pe baseline.
+    """
+    import json
+    import os
+
+    from workers.knowledge import KNOWLEDGE_REGISTRY, match_guides
+
+    arch: dict = {}
+    try:
+        summary = bb_read_summary("strings_summary", project_name)
+        if summary.get("status") == "success":
+            arch = (summary.get("data") or {}).get("arch_detection") or {}
+    except Exception:
+        arch = {}
+
+    names = match_guides(arch)
+    if not arch:
+        bb_log_event(
+            "active_guides_default_fallback",
+            {"reason": "strings_summary or arch_detection missing"},
+            project_name,
+        )
+
+    guides = [
+        {
+            "name": n,
+            "title": KNOWLEDGE_REGISTRY[n].title,
+            "priority": KNOWLEDGE_REGISTRY[n].priority,
+        }
+        for n in names
+    ]
+    doc = {
+        "status": "success",
+        "guides": guides,
+        "arch_detection": arch,
+        "resolved_at": _now_iso(),
+    }
+    try:
+        meta_dir = os.path.join(".blackboard", project_name, "meta")
+        os.makedirs(meta_dir, exist_ok=True)
+        with open(os.path.join(meta_dir, "active_guides.json"), "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        return {"status": "error", "error": str(exc), "guides": guides}
+    return doc
+
+
 # === Dynamic Workflow Orchestrator ===
 
 @node(name="analysis_orchestrator", rerun_on_resume=True)
@@ -340,6 +392,11 @@ async def analysis_orchestrator(ctx: Any, node_input: Any | None = None) -> Any:
             ctx.run_node(export_interface_analyzer),
         )
         ctx.state["phase0_complete"] = True
+
+    # --- Resolve active knowledge guides from Phase 0 arch_detection ---
+    if not ctx.state.get("active_guides_resolved"):
+        resolve_active_guides(ctx.state["sample_project_name"])
+        ctx.state["active_guides_resolved"] = True
 
     # --- Phase 1: Deep analysis workers in parallel ---
     if not ctx.state.get("phase1_complete"):
@@ -822,6 +879,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from tools.blackboard_tools import (
+    _now_iso,
     bb_checkpoint, bb_has_artifact, bb_list_summaries, bb_load_checkpoint, bb_log_event,
     bb_read_extract, bb_read_summary, bb_write_artifact, bb_write_summary,
     load_function_data,
