@@ -65,3 +65,42 @@ def test_build_review_message_handles_json_string_state():
     assert "Stealer" in msg
     assert "high" in msg
     assert "CONFIRM" in msg
+
+
+def test_persist_worker_output_coerces_json_string(monkeypatch):
+    """Regression: raw JSON string from ADK state must be coerced to dict
+    before artifact write and extraction prompt build."""
+    import agent
+
+    captured = {}
+
+    def fake_write_artifact(name, data, project):
+        captured["artifact"] = data
+
+    def fake_build_prompt(artifact, artifact_type):
+        captured["prompt_artifact"] = artifact
+        return "prompt"
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, **kwargs):
+            return iter([])
+
+    monkeypatch.setattr(agent, "bb_write_artifact", fake_write_artifact)
+    monkeypatch.setattr(agent, "build_extraction_prompt", fake_build_prompt)
+    monkeypatch.setattr(agent, "Runner", FakeRunner)
+
+    import asyncio
+    from tools.token_stats import AnalysisTokenReport
+
+    asyncio.run(agent._persist_worker_output(
+        worker=type("W", (), {"name": "w", "output_key": "k"})(),
+        raw_output='{"findings": ["a"]}',
+        artifact_type="strings",
+        project_name="proj",
+        token_report=AnalysisTokenReport(sample_project_name="proj"),
+    ))
+    assert captured["artifact"] == {"findings": ["a"]}
+    assert captured["prompt_artifact"] == {"findings": ["a"]}
