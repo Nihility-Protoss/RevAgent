@@ -248,27 +248,38 @@ print(str(token_report))                # 人类可读报告
 
 ```
 multi_agent_adk/
-├── agent.py                          # 根工作流定义 + Token 统计 + 运行时入口
+├── agent.py                          # 瘦入口：运行时入口（run_analysis / run_analysis_with_blackboard）+ root_agent 再导出
 ├── pyproject.toml                    # 项目依赖
-├── .env                              # GOOGLE_API_KEY
+├── .env                              # MOONSHOT_API_KEY（及 MODEL/API_KEY/BASE_URL，代码实际读取）
 ├── ARCHITECTURE.md                   # 本文件 — 架构指南
 ├── tools/                            # FunctionTool 实现
 │   ├── __init__.py
-│   ├── file_loaders.py               # IDA 导出文件加载工具
-│   └── pe_utils.py                   # PE 辅助工具（熵值计算等）
+│   ├── file_loaders.py               # IDA 导出文件加载工具（含 Phase -1 预提取）
+│   ├── pe_utils.py                   # PE 辅助工具（熵值计算等）
+│   ├── blackboard_tools.py           # 黑板读写、checkpoint、日志、函数反编译片段加载
+│   ├── state_utils.py                # Session State 解析辅助（coerce_state_dict / extract_arch_detection）
+│   └── token_stats.py                # Token 统计（StageTokenStats / AnalysisTokenReport）
 ├── workers/                          # Worker Agent 定义
 │   ├── __init__.py
 │   ├── shared_prompts.py             # 五段式提示词模板
+│   ├── extractor.py                  # 摘要提取器 Agent（artifact → ≤1500 tokens summary）
 │   ├── knowledge/                    # 专项分析方法论知识库（arch_detection 路由 + load_arch_guide 工具）
+│   ├── orchestrator.py               # Workflow 组装 + 各阶段编排（原 agent.py 编排主体）
 │   ├── phase0/                       # Phase 0: 快速定性
 │   │   ├── __init__.py
 │   │   ├── string_artifact_analyst.py
 │   │   ├── api_behavior_profiler.py
 │   │   └── export_interface_analyzer.py
-│   └── phase1/                       # Phase 1: 行为定型+函数筛选
+│   ├── phase1/                       # Phase 1: 行为定型+函数筛选
+│   │   ├── __init__.py
+│   │   ├── behavior_profile_synthesizer.py
+│   │   └── function_boundary_detector.py
+│   ├── phase3/                       # Phase 3: 函数级深度分析（动态循环）
+│   │   ├── __init__.py
+│   │   └── function_deep_analyzer.py
+│   └── phase4/                       # Phase 4: 综合报告
 │       ├── __init__.py
-│       ├── behavior_profile_synthesizer.py
-│       └── function_boundary_detector.py
+│       └── synthesis_agent.py
 ├── callbacks/                        # 回调函数
 │   ├── __init__.py
 │   └── human_review.py               # 人工审查回调
@@ -276,7 +287,15 @@ multi_agent_adk/
     ├── __init__.py
     ├── test_tools.py
     ├── test_workers.py
-    └── test_integration.py
+    ├── test_integration.py
+    ├── test_blackboard_tools.py
+    ├── test_extractor.py
+    ├── test_fault_tolerance.py
+    ├── test_pre_extract.py
+    ├── test_phase3.py
+    ├── test_phase4.py
+    ├── test_knowledge.py
+    └── test_state_coercion.py
 ```
 
 ---
@@ -288,8 +307,9 @@ multi_agent_adk/
 | 扩展项 | 说明 | 预计改动 |
 |-------|------|---------|
 | **技能知识精修** | 将 `arch_windows_pe.md` 中的专项分析知识（DLL插件型/文件加载型/API哈希动态解析等）精修进各 Worker 提示词 | `workers/phase0/*.py`, `workers/phase1/*.py` |
-| **函数级深度分析 Worker** | 对 `function_boundary_analysis` 推荐的 Top N 候选函数进行逐函数汇编级分析 | 新增 `workers/phase2/function_deep_analyzer.py` |
-| **动态 Worker 构建** | 根据人工确认的函数数量，动态创建函数分析 Worker 实例 | `agent.py` 中在 Scheduler 后增加动态 Workflow 构建逻辑 |
+| **函数级深度分析 Worker** ✅ 已落地 | 对 `function_boundary_analysis` 推荐的 Top N 候选函数进行逐函数汇编级分析 | 已实现于 `workers/phase3/function_deep_analyzer.py` |
+| **动态 Worker 构建** ✅ 已落地 | 根据人工确认的函数数量，动态创建函数分析 Worker 实例 | 已实现于 `workers/orchestrator.py`（Phase 3 动态循环） |
+| **Worker output_schema 化** | 为 Worker 声明 `output_schema`，根治 state 中以 JSON 字符串存储的结构化输出 | `workers/phase*/**.py`、`tools/state_utils.py` |
 
 ### P2 — 中优先级
 

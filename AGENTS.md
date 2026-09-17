@@ -56,7 +56,7 @@ python_files = ["test_*.py"]
 
 ```
 multi_agent_adk/
-├── agent.py                          # 根代理、Token 统计、运行时入口（run_analysis / run_analysis_with_blackboard）
+├── agent.py                          # 瘦入口：运行时入口 + root_agent 再导出
 ├── pyproject.toml                    # 项目元数据 + pytest 配置
 ├── uv.lock                           # uv 锁定文件
 ├── .env                              # API Key（敏感，已 gitignore）
@@ -64,11 +64,14 @@ multi_agent_adk/
 ├── tools/                            # FunctionTool 实现
 │   ├── file_loaders.py               # IDA 导出文件加载 / Phase -1 预提取（pre_extract_sample）
 │   ├── pe_utils.py                   # Shannon 熵计算等 PE 辅助
-│   └── blackboard_tools.py           # 黑板读写、checkpoint、日志、函数反编译片段加载
+│   ├── blackboard_tools.py           # 黑板读写、checkpoint、日志、函数反编译片段加载
+│   ├── state_utils.py                # Session State 解析辅助（coerce_state_dict / extract_arch_detection）
+│   └── token_stats.py                # Token 统计（StageTokenStats / AnalysisTokenReport）
 ├── workers/                          # Worker Agent 定义
 │   ├── shared_prompts.py             # 五段式提示词模板 + JSON/置信度规则
 │   ├── extractor.py                  # 摘要提取器 Agent（将 artifact 压缩为 ≤1500 tokens 的 summary）
 │   ├── knowledge/                    # 专项分析方法论知识库（arch_detection 路由 + load_arch_guide 工具）
+│   ├── orchestrator.py               # 编排主体：Workflow 组装 + Phase 0→4 编排（原 agent.py 承接）
 │   ├── phase0/                       # 快速定性
 │   │   ├── string_artifact_analyst.py
 │   │   ├── api_behavior_profiler.py
@@ -252,10 +255,7 @@ pytest -v
 
 3. ~~Worker 提示词幻觉风险~~ —— **已缓解**（2026-06-09）：全部 Worker 增加数据充足性检查、证据链约束、最简 schema（2层嵌套上限）、具体反幻觉规则。
 
-4. **`analysis_orchestrator` 与 `scheduler_agent` 的定义顺序**
-   - `analysis_orchestrator` 函数体中引用了 `scheduler_agent`，但 `scheduler_agent` 在 `analysis_orchestrator` 之后定义。Python 函数在调用时才会解析闭包变量，所以导入阶段不会报错；但在运行到 `ctx.run_node(scheduler_agent)` 时必须确保 `scheduler_agent` 已经绑定。
-
-5. **测试的 cwd 敏感性**
+4. **测试的 cwd 敏感性**
    - 黑板测试和预提取测试会 `os.chdir(tempdir)`。Windows 下临时目录句柄可能未释放，测试里已经设置 `ignore_cleanup_errors=True`；本地运行若遇到权限错误，通常是杀毒软件或文件句柄未释放，重试即可。
 
 ---
@@ -269,7 +269,7 @@ pytest -v
 | 新增文件加载 Tool | `tools/file_loaders.py`，注册到 `agent.py` 的 `ALL_TOOLS` |
 | 修改黑板目录结构 | `tools/blackboard_tools.py` 中的 `_board_path` 和 `_ensure_dirs` |
 | 新增样本类型（LNK/ELF） | 新增 `workers/optional/` 子 Agent，在 `detect_sample_type` 和 orchestrator 中动态加载 |
-| 修改 Token 统计字段 | `agent.py` 中的 `StageTokenStats` / `AnalysisTokenReport` |
+| 修改 Token 统计字段 | `tools/token_stats.py` 中的 `StageTokenStats` / `AnalysisTokenReport` |
 | 补全缺失的 Workflow | `agent.py`，参考 `docs/superpowers/specs/2026-06-08-dynamic-workflow-setup-hitl-design.md`（若本地存在） |
 
 ---

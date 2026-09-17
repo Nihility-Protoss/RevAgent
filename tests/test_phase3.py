@@ -54,8 +54,8 @@ def test_func_analysis_prompt_includes_guides_and_project():
     from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
     func_data = {
         "status": "success",
-        "decompile": "int __fastcall sub_401000(int a1) { return a1 + 1; }",
-        "disassembly": "",
+        "decompile_snippet": "int __fastcall sub_401000(int a1) { return a1 + 1; }",
+        "disassembly_snippet": "",
     }
     prompt = build_func_analysis_prompt(
         "0x401000", "sub_401000", func_data,

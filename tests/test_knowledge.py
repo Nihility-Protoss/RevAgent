@@ -1,8 +1,4 @@
 """Tests for workers.knowledge package."""
-import os
-import tempfile
-
-import pytest
 
 
 def test_registry_contains_windows_pe():

@@ -147,7 +147,8 @@ async def run_analysis_with_blackboard(
     )
     runner = Runner(agent=root_agent, app_name="malware_analysis", session_service=session_service)
 
-    # Phase 0/1/2: Run Workflow (Static Graph handles parallel execution)
+    # Phase 0/1/2: run the workflow (parallel fan-out is declared in workers/orchestrator's edges);
+    # worker outputs are then persisted to the blackboard below.
     if state.get("current_phase") in ("pre_extract_complete", "phase0", "phase1", "phase2"):
         # Worker agents are assembled in workers/orchestrator; import here to keep
         # this module's top-level imports free of worker assembly.

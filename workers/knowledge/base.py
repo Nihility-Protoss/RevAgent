@@ -127,7 +127,7 @@ def _load_active(project_name: str) -> dict:
     }
 
 
-def match_guides(arch_detection: dict) -> list:
+def match_guides(arch_detection: dict) -> list[str]:
     """Map an arch_detection dict to active guide names via applies_to tags.
 
     Baseline guides (applies_to contains "baseline", e.g. windows_pe) are
