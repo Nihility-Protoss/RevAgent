@@ -3,6 +3,7 @@ from workers.knowledge.base import (
     KNOWLEDGE_REGISTRY,
     KnowledgeMeta,
     load_knowledge,
+    match_guides,
 )
 
-__all__ = ["KnowledgeMeta", "KNOWLEDGE_REGISTRY", "load_knowledge"]
+__all__ = ["KnowledgeMeta", "KNOWLEDGE_REGISTRY", "load_knowledge", "match_guides"]

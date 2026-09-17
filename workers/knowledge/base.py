@@ -127,6 +127,35 @@ def _load_active(project_name: str) -> dict:
     }
 
 
+def match_guides(arch_detection: dict) -> list:
+    """Map an arch_detection dict to active guide names.
+
+    windows_pe is always included as the baseline. Language/form-specific
+    guides are only activated when confidence is not low.
+    """
+    arch = arch_detection or {}
+    language = str(arch.get("language") or "unknown").lower()
+    sample_form = str(arch.get("sample_form") or "").lower()
+    confidence = str(arch.get("confidence") or "low").lower()
+
+    names = [_DEFAULT_GUIDE]
+    if confidence != "low":
+        if language == "c_cpp":
+            names.append("cpp")
+        elif language == "rust":
+            names.append("rust")
+        elif language == "golang":
+            names.append("golang")
+        if sample_form == "exe_file_loader":
+            names.append("file_loader_triage")
+
+    ordered = sorted(
+        (KNOWLEDGE_REGISTRY[n] for n in names if n in KNOWLEDGE_REGISTRY),
+        key=lambda m: m.priority,
+    )
+    return [m.name for m in ordered]
+
+
 def load_knowledge(name: str, project_name: str) -> dict:
     """Load one knowledge guide by name (or __active__ for sample-resolved set).
 

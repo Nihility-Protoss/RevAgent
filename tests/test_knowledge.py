@@ -54,3 +54,53 @@ def test_registry_contains_go_and_triage_guides():
     assert KNOWLEDGE_REGISTRY["golang"].priority == 90
     assert "file_loader_triage" in KNOWLEDGE_REGISTRY
     assert KNOWLEDGE_REGISTRY["file_loader_triage"].priority == 80
+
+
+def test_match_guides_language_routing():
+    from workers.knowledge import match_guides
+    guides = match_guides({"language": "rust", "confidence": "high"})
+    assert guides[0] == "windows_pe"
+    assert "rust" in guides
+    assert "cpp" not in guides
+
+
+def test_match_guides_low_confidence_falls_back_to_baseline():
+    from workers.knowledge import match_guides
+    assert match_guides({"language": "unknown", "confidence": "low"}) == ["windows_pe"]
+    assert match_guides({}) == ["windows_pe"]
+
+
+def test_match_guides_file_loader_form():
+    from workers.knowledge import match_guides
+    guides = match_guides(
+        {"language": "c_cpp", "confidence": "medium", "sample_form": "exe_file_loader"}
+    )
+    assert "cpp" in guides
+    assert "file_loader_triage" in guides
+    # priority 升序：windows_pe(10) < file_loader_triage(80) < cpp(90)
+    assert guides.index("file_loader_triage") < guides.index("cpp")
+
+
+def test_load_active_falls_back_when_meta_missing():
+    from workers.knowledge import load_knowledge
+    result = load_knowledge("__active__", "nonexistent_project")
+    assert result["status"] == "success"
+    assert result["guides"] == ["windows_pe"]
+    assert "PE" in result["content"]
+
+
+def test_load_active_reads_meta(tmp_path, monkeypatch):
+    import json
+    import os
+    from workers.knowledge import load_knowledge
+    monkeypatch.chdir(tmp_path)
+    os.makedirs(".blackboard/proj/meta")
+    with open(".blackboard/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {"status": "success",
+             "guides": [{"name": "windows_pe"}, {"name": "rust"}]},
+            f,
+        )
+    result = load_knowledge("__active__", "proj")
+    assert result["guides"] == ["windows_pe", "rust"]
+    assert "Rust" in result["content"]

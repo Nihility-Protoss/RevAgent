@@ -42,6 +42,7 @@ from tools.file_loaders import (
 )
 from tools.pe_utils import calculate_entropy
 from tools.blackboard_tools import bb_read_summary, bb_read_extract
+from workers.knowledge import load_knowledge as load_arch_guide
 
 # Load environment variables
 load_dotenv()
@@ -57,6 +58,7 @@ ALL_TOOLS = [
     calculate_entropy,
     bb_read_summary,
     bb_read_extract,
+    load_arch_guide,
 ]
 
 # Bind tools to workers
