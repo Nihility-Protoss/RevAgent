@@ -46,3 +46,11 @@ def test_registry_contains_language_guides():
     for name in ("cpp", "rust"):
         assert name in KNOWLEDGE_REGISTRY
         assert KNOWLEDGE_REGISTRY[name].priority == 90
+
+
+def test_registry_contains_go_and_triage_guides():
+    from workers.knowledge import KNOWLEDGE_REGISTRY
+    assert "golang" in KNOWLEDGE_REGISTRY
+    assert KNOWLEDGE_REGISTRY["golang"].priority == 90
+    assert "file_loader_triage" in KNOWLEDGE_REGISTRY
+    assert KNOWLEDGE_REGISTRY["file_loader_triage"].priority == 80
