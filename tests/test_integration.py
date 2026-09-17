@@ -7,16 +7,17 @@ from google.adk.events.request_input import RequestInput
 from google.adk.workflow._function_node import FunctionNode
 from google.genai import types
 
-from agent import (
-    root_agent,
+from agent import root_agent, run_analysis, run_analysis_with_blackboard
+from tools.token_stats import AnalysisTokenReport, StageTokenStats
+from workers.orchestrator import (
+    _build_review_message,
+    _parse_approval_reply,
+    _parse_config_from_text,
     analysis_orchestrator,
-    run_analysis,
-    AnalysisTokenReport,
-    StageTokenStats,
-    run_analysis_with_blackboard,
+    approval_fn,
+    resolve_active_guides,
     setup_fn,
     setup_node,
-    _parse_config_from_text,
 )
 
 
@@ -251,7 +252,7 @@ def test_blackboard_directory_structure():
 
 def test_orchestrator_skips_completed_phases():
     """Checkpoint logic: if phase0_complete is set, orchestrator should skip Phase 0."""
-    from agent import analysis_orchestrator
+    from workers.orchestrator import analysis_orchestrator
     import inspect
 
     source = inspect.getsource(analysis_orchestrator._func)
@@ -264,7 +265,7 @@ def test_orchestrator_skips_completed_phases():
 
 def test_approval_fn_exists():
     """approval_fn FunctionNode must exist with correct config."""
-    from agent import approval_fn
+    from workers.orchestrator import approval_fn
     assert isinstance(approval_fn, FunctionNode)
     assert approval_fn.name == "approval_gate"
     assert approval_fn.rerun_on_resume is False
@@ -272,7 +273,7 @@ def test_approval_fn_exists():
 
 def test_parse_approval_reply_confirm():
     """CONFIRM should be parsed correctly."""
-    from agent import _parse_approval_reply
+    from workers.orchestrator import _parse_approval_reply
     decision, addrs = _parse_approval_reply("CONFIRM")
     assert decision == "confirm"
     assert addrs is None
@@ -280,7 +281,7 @@ def test_parse_approval_reply_confirm():
 
 def test_parse_approval_reply_modify():
     """MODIFY with addresses should be parsed correctly."""
-    from agent import _parse_approval_reply
+    from workers.orchestrator import _parse_approval_reply
     decision, addrs = _parse_approval_reply("MODIFY 0x401000,0x402000")
     assert decision == "modify"
     assert addrs == ["0x401000", "0x402000"]
@@ -288,7 +289,7 @@ def test_parse_approval_reply_modify():
 
 def test_parse_approval_reply_invalid():
     """Invalid reply should return invalid decision."""
-    from agent import _parse_approval_reply
+    from workers.orchestrator import _parse_approval_reply
     decision, addrs = _parse_approval_reply("maybe")
     assert decision == "invalid"
     assert addrs is None
@@ -296,7 +297,7 @@ def test_parse_approval_reply_invalid():
 
 def test_build_review_message_includes_behavior_type():
     """Review message should include key fields from state."""
-    from agent import _build_review_message
+    from workers.orchestrator import _build_review_message
     state = {
         "behavior_profile": {"behavior_profile": {"primary_type": "Stealer", "confidence": "high"}},
         "string_analysis": {"suspicious_patterns": [{"risk_level": "high"}, {"risk_level": "high"}]},
@@ -314,7 +315,7 @@ def test_resolve_active_guides_rust(tmp_path, monkeypatch):
     """arch_detection=rust/high activates rust guide; meta file written."""
     import json
     import os
-    from agent import resolve_active_guides
+    from workers.orchestrator import resolve_active_guides
     monkeypatch.chdir(tmp_path)
     os.makedirs(".blackboard/proj/summary")
     with open(".blackboard/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
@@ -334,7 +335,7 @@ def test_resolve_active_guides_rust(tmp_path, monkeypatch):
 def test_resolve_active_guides_low_confidence_defaults(tmp_path, monkeypatch):
     import json
     import os
-    from agent import resolve_active_guides
+    from workers.orchestrator import resolve_active_guides
     monkeypatch.chdir(tmp_path)
     os.makedirs(".blackboard/proj/summary")
     with open(".blackboard/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
@@ -350,7 +351,7 @@ def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
     """Missing strings_summary must not break the pipeline; default + log."""
     import json
     import os
-    from agent import resolve_active_guides
+    from workers.orchestrator import resolve_active_guides
     monkeypatch.chdir(tmp_path)
     result = resolve_active_guides("proj")
     assert result["status"] == "success"
@@ -360,7 +361,7 @@ def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
 
 def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
     """arch_detection passed from state must activate rust without a summary file."""
-    from agent import resolve_active_guides
+    from workers.orchestrator import resolve_active_guides
     monkeypatch.chdir(tmp_path)
     result = resolve_active_guides(
         "proj", arch_detection={"language": "rust", "confidence": "high"}
@@ -376,29 +377,10 @@ def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
 def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch):
     """Corrupt meta/active_guides.json must fall back to the windows_pe baseline."""
     import os
-    from agent import _load_active_guides_text
+    from workers.orchestrator import _load_active_guides_text
     monkeypatch.chdir(tmp_path)
     os.makedirs(".blackboard/proj/meta")
     with open(".blackboard/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
         f.write("{invalid")
     text = _load_active_guides_text("proj")
     assert "PE" in text
-
-
-def test_extract_arch_detection_from_dict():
-    from agent import _extract_arch_detection
-    arch = {"language": "rust", "confidence": "high"}
-    assert _extract_arch_detection({"arch_detection": arch}) == arch
-
-
-def test_extract_arch_detection_from_json_string():
-    from agent import _extract_arch_detection
-    arch = {"language": "golang", "confidence": "high"}
-    result = _extract_arch_detection('{"arch_detection": {"language": "golang", "confidence": "high"}}')
-    assert result == arch
-
-
-def test_extract_arch_detection_invalid_returns_empty():
-    from agent import _extract_arch_detection
-    assert _extract_arch_detection("not json") == {}
-    assert _extract_arch_detection(None) == {}

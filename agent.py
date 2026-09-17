@@ -6,22 +6,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from workers.orchestrator import (  # noqa: F401  (re-exports, tests migrate in Task 5)
-    LLM_MODEL,
-    _build_review_message,
-    _load_active_guides_text,
-    _parse_approval_reply,
-    _parse_config_from_text,
-    analysis_orchestrator,
-    approval_fn,
-    resolve_active_guides,
-    root_agent,
-    setup_fn,
-    setup_node,
-)
-# Backward-compat alias: the helper now lives in tools.state_utils and is
-# consumed by orchestrator; test_integration still imports it from agent.
-from tools.state_utils import extract_arch_detection as _extract_arch_detection  # noqa: F401
+from workers.orchestrator import root_agent
 
 import json
 from datetime import datetime, timezone
@@ -40,7 +25,7 @@ from tools.blackboard_tools import (
 )
 from tools.file_loaders import pre_extract_sample
 from tools.state_utils import coerce_state_dict
-from tools.token_stats import AnalysisTokenReport, StageTokenStats  # noqa: F401 (StageTokenStats: re-export consumed by tests until Task 5)
+from tools.token_stats import AnalysisTokenReport
 from workers.extractor import build_extraction_prompt, extractor_agent
 
 
