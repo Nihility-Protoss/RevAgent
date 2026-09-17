@@ -67,3 +67,12 @@ def test_phase3_prompt_has_insufficient_data_exit():
     from workers.phase3.function_deep_analyzer import FUNC_ANALYSIS_PROMPT_TEMPLATE
     assert "insufficient_data" in FUNC_ANALYSIS_PROMPT_TEMPLATE
     assert "代码片段不足" in FUNC_ANALYSIS_PROMPT_TEMPLATE
+
+
+def test_string_analyst_has_arch_detection():
+    """Phase 0 string analyst must detect architecture/language/packer."""
+    from workers.phase0.string_artifact_analyst import string_artifact_analyst
+    assert "arch_detection" in string_artifact_analyst.instruction
+    assert "compiler_hints" in string_artifact_analyst.instruction
+    assert "sample_form" in string_artifact_analyst.instruction
+    assert "/rustc/" in string_artifact_analyst.instruction

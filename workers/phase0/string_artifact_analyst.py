@@ -29,7 +29,14 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 7. 注册表路径分析：识别持久化相关的注册表操作目标
 8. 互斥体名分析：识别进程互斥、实例控制相关的名称
 9. 命令行参数分析：识别脚本执行、编码命令等迹象
-10. 异常长字符串：标记长度异常（>200字符）的字符串，可能包含编码载荷""",
+10. 异常长字符串：标记长度异常（>200字符）的字符串，可能包含编码载荷
+11. **架构识别（arch_detection）**：判定样本的编译语言、编译器、加壳/保护方式与样本形态，为后续阶段的知识注入提供路由依据。识别要点：
+    - Rust 证据：`/rustc/<hash>/` 编译器路径、`.rs` 源码路径、`core::panicking::panic`、`unwrap failed`。
+    - Go 证据：`go.buildid`、`go1.<ver>` 运行时版本、`main.`/`github.com/` 包路径前缀。
+    - C/C++ 证据：MSVC 的 `??0`/`??1` 修饰名、`__security_check_cookie`、PDB 路径；GCC 的 `.gcc_except_table`。
+    - 加壳/保护：UPX 段名（`UPX0`/`UPX1`）与字符串、`Themida`、`VMProtect`、Enigma 等；区名正常但导入表极稀疏也可能指示自定义壳。
+    - 样本形态：`exe_file_loader`（出现第二个 PE/载荷文件名、MZ 头字符串、无引用的大字节数组）；`dll_plugin`（导出 Install/Start/ServiceMain 类导出）；其余为 `plain_exe`。
+    - 每条判定必须附 strings 中的原始证据行；证据不足时填 `unknown`，置信度相应降级，禁止猜测。""",
 
     output_format=JSON_OUTPUT_RULE.format(json_schema="""{
   "sample_family_hints": ["基于字符串推断的样本家族线索"],
@@ -70,6 +77,14 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     }
   ],
   "overall_assessment": "字符串整体评估结论",
+  "arch_detection": {
+    "language": "c_cpp | rust | golang | unknown",
+    "compiler_hints": ["msvc | gcc | mingw | ..."],
+    "packer_protector": ["upx | vmp | themida | none | unknown | ..."],
+    "sample_form": "exe_file_loader | dll_plugin | plain_exe | unknown",
+    "confidence": "high | medium | low",
+    "evidence": ["<每条判定对应的原始字符串证据>"]
+  },
   "recommended_next_steps": ["建议的后续分析方向"]
 }""") + CONFIDENCE_RULES,
 
