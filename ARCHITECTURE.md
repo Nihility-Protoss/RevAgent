@@ -154,6 +154,13 @@ root_workflow = Workflow(
 - **输出状态**: `execution_status = "WAITING_FOR_APPROVAL"`
 - **回复格式**: `CONFIRM` 或 `MODIFY [具体修正内容]`
 
+### 3.4 知识指南注入（Phase 0→1 门控）
+
+- **来源**: Phase 0 字符串分析输出 `arch_detection`（架构/语言/加载方式）。
+- **路由**: orchestrator 的 `resolve_active_guides` 读取 `summary/strings_summary.json` 的 `arch_detection`，匹配 `workers/knowledge/` 知识库，将激活的指南元数据写入 `meta/active_guides.json`。
+- **消费**: Phase 1 经 `load_arch_guide("__active__")` 按需加载激活指南并注入 prompt；Phase 3 将同一批指南注入动态 Analyzer prompt。
+- **默认回退**: `strings_summary` 或 `arch_detection` 缺失时回退到默认指南 `windows_pe`。
+
 ---
 
 ## 4. FunctionTool 清单
@@ -252,6 +259,7 @@ multi_agent_adk/
 ├── workers/                          # Worker Agent 定义
 │   ├── __init__.py
 │   ├── shared_prompts.py             # 五段式提示词模板
+│   ├── knowledge/                    # 专项分析方法论知识库（arch_detection 路由 + load_arch_guide 工具）
 │   ├── phase0/                       # Phase 0: 快速定性
 │   │   ├── __init__.py
 │   │   ├── string_artifact_analyst.py

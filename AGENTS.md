@@ -68,6 +68,7 @@ multi_agent_adk/
 ├── workers/                          # Worker Agent 定义
 │   ├── shared_prompts.py             # 五段式提示词模板 + JSON/置信度规则
 │   ├── extractor.py                  # 摘要提取器 Agent（将 artifact 压缩为 ≤1500 tokens 的 summary）
+│   ├── knowledge/                    # 专项分析方法论知识库（arch_detection 路由 + load_arch_guide 工具）
 │   ├── phase0/                       # 快速定性
 │   │   ├── string_artifact_analyst.py
 │   │   ├── api_behavior_profiler.py
@@ -110,6 +111,7 @@ multi_agent_adk/
 
 - **Phase -1**（`pre_extract_sample`）：把 `strings.txt` / `imports.txt` / `exports.txt` / `function_index.txt` 解析为 `.blackboard/{project}/extracts/*.json`。
 - **Phase 0 Worker** 读取 `extracts/` 分片 → 输出完整 artifact 到 `artifacts/p0_*_{timestamp}.json`。
+- **知识指南门控（Phase 0→1）**：Phase 0 字符串分析输出 `arch_detection`；orchestrator 的 `resolve_active_guides` 据此匹配知识库并写入 `meta/active_guides.json`。Phase 1 经 `load_arch_guide("__active__")` 按需加载，Phase 3 注入动态 Analyzer prompt。
 - **Extractor Agent** 将 artifact 提炼为 `summary/{strings,api,exports}_summary.json`（硬约束 ≤1500 tokens）。
 - **Phase 1 Worker** 读取 `summary/` + `extracts/` → 输出 `artifacts/p1_*_{timestamp}.json` → 再提炼为 `summary/`。
 - **Phase 2 Scheduler** 读取 summary，生成决策并触发 `human_review_callback`。
@@ -221,6 +223,7 @@ pytest -v
   - `test_tools.py`：验证 `file_loaders`/`pe_utils` 对正常/缺失输入的处理。
   - `test_blackboard_tools.py`：验证 summary 大小限制、checkpoint、artifact 存在性、日志追加。
   - `test_workers.py` / `test_extractor.py` / `test_phase3.py` / `test_phase4.py`：验证 Agent 存在、名称、output_key、prompt 包含必要字段。
+  - `test_knowledge.py`：验证知识库注册表、token 预算、`__active__` 解析、`match_guides` 路由。
 - **集成测试**：
   - `test_integration.py`：验证 orchestrator、token 报告统计、setup_fn HITL、`_parse_config_from_text` 多格式解析、预提取生成 `.blackboard/` 目录结构。
   - `test_fault_tolerance.py`：验证失败后的状态恢复和摘要大小拒绝。
