@@ -40,7 +40,15 @@ SUMMARY_SCHEMAS = {
   },
   "behavior_indicators": ["疑似网络通信", "疑似持久化"],
   "confidence": "medium",
-  "token_estimate": 1200
+  "token_estimate": 1200,
+  "arch_detection": {
+    "language": "...",
+    "compiler_hints": ["..."],
+    "packer_protector": ["..."],
+    "sample_form": "...",
+    "confidence": "high|medium|low",
+    "evidence": ["..."]
+  }
 }""",
     "api": """{
   "worker": "api_behavior_profiler",

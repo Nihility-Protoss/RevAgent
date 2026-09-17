@@ -20,3 +20,8 @@ def test_build_extraction_prompt_returns_string():
 def test_extractor_has_tools():
     assert extractor_agent.tools is not None
     assert len(extractor_agent.tools) > 0
+
+
+def test_strings_summary_schema_includes_arch_detection():
+    from workers.extractor import SUMMARY_SCHEMAS
+    assert "arch_detection" in SUMMARY_SCHEMAS["strings"]
