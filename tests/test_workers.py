@@ -83,3 +83,9 @@ def test_phase0_secondary_analysts_mention_arch_evidence():
     from workers.phase0.export_interface_analyzer import export_interface_analyzer
     for w in (api_behavior_profiler, export_interface_analyzer):
         assert "编译语言" in w.instruction, f"{w.name} missing arch evidence hint"
+
+
+def test_boundary_detector_uses_arch_guide():
+    from workers.phase1.function_boundary_detector import function_boundary_detector
+    assert "load_arch_guide" in function_boundary_detector.instruction
+    assert "__active__" in function_boundary_detector.instruction

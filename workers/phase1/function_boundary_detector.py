@@ -42,7 +42,9 @@ FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
      c) size 在 50-1000 字节范围内
      d) 该函数的 xrefs 在所有非 thunk 函数中的排名进入前 10%
      e) 满足 a-d 的函数总数不得超过 20 个（如超过，按 xrefs 排序取前 20）
-   - priority=1-2: thunk 函数或极小函数""",
+   - priority=1-2: thunk 函数或极小函数
+
+【专项方法论加载 — 必须首先执行】开始筛选前，先调用工具 load_arch_guide，参数 name 填 "__active__"、project_name 填当前黑板项目名，获取本样本的专项分析方法论（如 C++ 函数族噪声过滤、Rust I/O 边界扫描、文件加载型五段式链条）。随后按所获方法论中的"噪声过滤"与"函数族分类"方法执行上述维度分析，并在 exclusion_notes 中注明哪些函数族按方法论被整族排除。若工具返回 error，按现有维度继续分析，不要中断。""",
 
     output_format=JSON_OUTPUT_RULE.format(json_schema="""{
   "total_functions": 函数总数,
