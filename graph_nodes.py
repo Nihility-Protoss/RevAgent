@@ -118,14 +118,23 @@ async def run_extraction(
 # === Worker 节点工厂（替代 ADK LlmAgent + output_key）===
 
 def make_worker_node(spec: WorkerSpec, llm=None):
-    """Compile a WorkerSpec into a LangGraph node function."""
-    model = llm or get_llm()
-    agent = create_agent(
-        model=model,
-        tools=list(spec.tools),
-        system_prompt=spec.instruction,
-        response_format=spec.output_schema,
-    )
+    """Compile a WorkerSpec into a LangGraph node function.
+
+    The model is resolved lazily on first node execution so that building the
+    graph (e.g. to inspect its topology) never requires API credentials.
+    """
+    _cache: dict = {}
+
+    def _agent():
+        if "agent" not in _cache:
+            _cache["model"] = llm or get_llm()
+            _cache["agent"] = create_agent(
+                model=_cache["model"],
+                tools=list(spec.tools),
+                system_prompt=spec.instruction,
+                response_format=spec.output_schema,
+            )
+        return _cache["agent"]
 
     async def node(state: AnalysisState, config: RunnableConfig = None) -> dict:
         project = state["sample_project_name"]
@@ -133,7 +142,7 @@ def make_worker_node(spec: WorkerSpec, llm=None):
             f"分析样本: {project}, "
             f"导出目录: {state.get('sample_export_dir', '')}"
         )
-        result = await agent.ainvoke({"messages": [("user", task)]}, config=config)
+        result = await _agent().ainvoke({"messages": [("user", task)]}, config=config)
         structured = result.get("structured_response")
         if structured is not None:
             payload = (
@@ -148,7 +157,7 @@ def make_worker_node(spec: WorkerSpec, llm=None):
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             bb_write_artifact(f"{prefix}_{spec.name}_{timestamp}", payload, project)
             await run_extraction(
-                payload, artifact_type, f"{artifact_type}_summary", project, model, config
+                payload, artifact_type, f"{artifact_type}_summary", project, _cache["model"], config
             )
         return {spec.output_key: payload}
 
@@ -358,9 +367,9 @@ def approval_gate_node(state: AnalysisState) -> dict:
 
 def make_phase3_node(llm=None):
     """Build the Phase 3 per-function deep-analysis node (serial loop)."""
-    model = llm or get_llm()
 
     async def phase3_deep_analysis_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
+        model = llm or get_llm()
         project = state["sample_project_name"]
         function_boundary = state.get("function_boundary_analysis") or {}
         all_candidates = function_boundary.get("candidates", [])
@@ -431,9 +440,9 @@ def _summary_data(summary: dict) -> dict:
 
 def make_shard_synthesis_node(llm=None):
     """Build the Phase 4 map node: shard synthesis over suspicious functions."""
-    model = llm or get_llm()
 
     async def shard_synthesis_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
+        model = llm or get_llm()
         project = state["sample_project_name"]
         s = _read_phase01_summaries(project)
         p3_summaries = bb_list_summaries("phase3_funcs/", project)
@@ -481,9 +490,9 @@ def make_shard_synthesis_node(llm=None):
 
 def make_aggregator_node(llm=None):
     """Build the Phase 4 reduce node: aggregate shard reports into final report."""
-    model = llm or get_llm()
 
     async def aggregator_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
+        model = llm or get_llm()
         project = state["sample_project_name"]
         s = _read_phase01_summaries(project)
 
