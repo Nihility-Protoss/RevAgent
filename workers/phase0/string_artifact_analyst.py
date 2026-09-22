@@ -1,6 +1,4 @@
-from google.adk.agents import LlmAgent
 from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
-from tools.file_loaders import load_strings
 
 STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意代码取证分析专家，专注于从 Windows PE 样本的字符串表中提取关键取证信息。
@@ -96,12 +94,4 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 - network_indicators.urls 中每个 URL 必须逐字引用自输入数据，不允许补全协议前缀
 - key_strings 中标记为 severity=high 的项，必须在 evidence 中逐字引用原始字符串
 """,
-)
-
-string_artifact_analyst = LlmAgent(
-    name="string_artifact_analyst",
-    description="Analyzes strings.txt from IDA export to extract forensic artifacts and behavioral indicators.",
-    instruction=STRING_ARTIFACT_ANALYST_INSTRUCTION,
-    tools=[load_strings],
-    output_key="string_analysis",
 )

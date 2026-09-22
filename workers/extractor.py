@@ -1,6 +1,4 @@
 import json
-from google.adk.agents import LlmAgent
-from tools.blackboard_tools import bb_write_summary
 
 
 EXTRACTION_PROMPT_TEMPLATE = """你是一个结构化摘要提取器。你的任务是从一份完整的分析结果中提取关键发现，生成供后续 Worker 读取的轻量摘要。
@@ -103,16 +101,3 @@ def build_extraction_prompt(artifact: dict, artifact_type: str) -> str:
         output_schema=schema,
         artifact_json=json.dumps(artifact, ensure_ascii=False, indent=2),
     )
-
-
-extractor_agent = LlmAgent(
-    name="summary_extractor",
-    description="Condenses full Worker artifacts into ≤1500-token structured summaries for downstream consumption.",
-    instruction=EXTRACTION_PROMPT_TEMPLATE.format(
-        artifact_type="(determined at runtime)",
-        output_schema=json.dumps(list(SUMMARY_SCHEMAS.keys())),
-        artifact_json="(injected at runtime)",
-    ),
-    tools=[bb_write_summary],
-    output_key="extracted_summary",
-)

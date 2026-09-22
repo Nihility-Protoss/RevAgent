@@ -1,6 +1,3 @@
-from google.adk.agents import LlmAgent
-
-
 FUNC_ANALYSIS_PROMPT_TEMPLATE = """你是一个恶意样本函数级分析专家。
 
 当前分析函数：{func_name} ({func_addr})
@@ -94,16 +91,3 @@ def build_func_analysis_prompt(
             "（如需调用 load_arch_guide 工具，project_name 参数填此值。）"
         )
     return prompt
-
-
-function_deep_analyzer = LlmAgent(
-    name="function_deep_analyzer",
-    description="Performs deep assembly-level analysis on a single function.",
-    instruction=FUNC_ANALYSIS_PROMPT_TEMPLATE.format(
-        func_addr="(runtime)", func_name="(runtime)", size=0, max_lines=200,
-        decompile_snippet="(runtime)", disassembly_snippet="(runtime)",
-        xrefs_in=["(runtime)"], xrefs_out=["(runtime)"],
-    ),
-    tools=[],
-    output_key="function_deep_analysis",
-)

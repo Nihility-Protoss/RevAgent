@@ -1,6 +1,4 @@
-from google.adk.agents import LlmAgent
 from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
-from tools.file_loaders import load_imports, load_strings
 
 API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意代码行为分析专家，专注于通过 PE 文件的导入表（Import Directory Table）和导入地址表（IAT）推断样本的潜在恶意行为模式。
@@ -93,12 +91,4 @@ API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 - api_hash_resolution_indicators.suspicious=true 且 confidence=high → 必须在 strings_extract 中列出具体的 hash 解析相关字符串作为证据
 - 序数导入的函数如果无法解析名称，标注为 ordinal_import_unresolved
 """,
-)
-
-api_behavior_profiler = LlmAgent(
-    name="api_behavior_profiler",
-    description="Profiles API behavior from imports.txt to identify malware patterns and MITRE mappings.",
-    instruction=API_BEHAVIOR_PROFILER_INSTRUCTION,
-    tools=[load_imports, load_strings],
-    output_key="api_behavior_analysis",
 )

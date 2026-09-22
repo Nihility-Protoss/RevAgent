@@ -1,6 +1,4 @@
-from google.adk.agents import LlmAgent
 from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
-from tools.file_loaders import load_strings, load_imports, load_exports
 
 BEHAVIOR_PROFILE_SYNTHESIZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意样本架构分析专家，负责综合 strings.txt、imports.txt 和 exports.txt 的分析结果，对样本进行行为定型和架构推断。
@@ -135,12 +133,4 @@ Phase 0 分析摘要（通过 bb_read_summary 读取）：
 - execution_chain_skeleton 如果无法还原完整调用链 → 允许输出部分链并标注 "[unverified from input]"
 - 禁止基于"常见恶意软件行为模式"补全缺失环节
 """,
-)
-
-behavior_profile_synthesizer = LlmAgent(
-    name="behavior_profile_synthesizer",
-    description="Synthesizes Phase 0 analysis results to profile malware behavior, architecture, and breakpoint recommendations.",
-    instruction=BEHAVIOR_PROFILE_SYNTHESIZER_INSTRUCTION,
-    tools=[load_strings, load_imports, load_exports],
-    output_key="behavior_profile",
 )

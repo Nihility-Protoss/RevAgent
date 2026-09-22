@@ -1,13 +1,23 @@
 [project]
 name = "multi-agent-adk"
 version = "0.1.0"
-description = "Malware analysis multi-agent system using Google ADK"
+description = "Malware analysis multi-agent system using LangGraph"
 requires-python = ">=3.10"
 dependencies = [
-    "google-adk>=0.2.0",
+    "langgraph>=1.0",
+    "langchain>=1.0",
+    "langchain-openai>=1.0",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
 ]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 应用型仓库：不需要把 tools/workers 等目录安装为包，仅需安装依赖
+py-modules = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

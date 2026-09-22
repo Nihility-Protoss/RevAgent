@@ -1,6 +1,3 @@
-from google.adk.agents import LlmAgent
-
-
 SHARD_SYNTHESIS_PROMPT = """你是恶意样本综合分析专家（局部分析模式）。
 
 你的任务是基于以下输入，生成一份局部综合分析报告。
@@ -57,21 +54,3 @@ AGGREGATOR_PROMPT = """你是恶意样本综合分析专家（汇总模式）。
   "recommendations": ["..."]
 }
 """
-
-
-synthesis_shard_agent = LlmAgent(
-    name="synthesis_shard",
-    description="Performs partial synthesis on a subset of phase3 function analyses.",
-    instruction=SHARD_SYNTHESIS_PROMPT,
-    output_key="shard_report",
-)
-
-aggregator_agent = LlmAgent(
-    name="synthesis_aggregator",
-    description="Aggregates shard reports into final comprehensive malware analysis report.",
-    instruction=AGGREGATOR_PROMPT,
-    output_key="final_report",
-)
-
-# Backward compatibility: keep the old name pointing to aggregator
-synthesis_agent = aggregator_agent

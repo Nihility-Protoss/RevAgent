@@ -1,6 +1,4 @@
-from google.adk.agents import LlmAgent
 from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
-from tools.file_loaders import load_exports, load_function_index
 
 EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名 Windows PE 导出表分析专家，专注于通过分析 exports.txt 和 function_index.txt 来识别样本的加载方式、命令接口和潜在恶意特征。
@@ -94,12 +92,4 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 - tls_callback_analysis.has_tls_callback=true → 必须在 exports 或 function_index 中明确发现 TlsCallback 相关符号
 - packer_indicators 中每个 indicator 的 confidence=high → 必须列出具体的节名/入口点地址/entropy 值
 """,
-)
-
-export_interface_analyzer = LlmAgent(
-    name="export_interface_analyzer",
-    description="Analyzes export table to identify loading patterns, command interfaces, and DLL plugin architecture.",
-    instruction=EXPORT_INTERFACE_ANALYZER_INSTRUCTION,
-    tools=[load_exports, load_function_index],
-    output_key="export_interface_analysis",
 )

@@ -1,6 +1,4 @@
-from google.adk.agents import LlmAgent
 from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONFIDENCE_RULES, DATA_SUFFICIENCY_RULE
-from tools.file_loaders import load_function_index, load_exports, load_strings
 
 FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名二进制分析专家，负责评估从 PE 文件中提取的函数列表，为后续深度分析确定优先级最高的候选函数。
@@ -85,12 +83,4 @@ FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 - 如果所有函数都是 thunk 或极小函数，标注 insufficient_interesting_functions
 - exclusion_notes 中每个被排除的函数必须说明具体排除原因
 """,
-)
-
-function_boundary_detector = LlmAgent(
-    name="function_boundary_detector",
-    description="Evaluates function list to determine high-priority candidates for deep analysis.",
-    instruction=FUNCTION_BOUNDARY_DETECTOR_INSTRUCTION,
-    tools=[load_function_index, load_exports, load_strings],
-    output_key="function_boundary_analysis",
 )
