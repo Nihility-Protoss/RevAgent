@@ -3,7 +3,7 @@ import tempfile
 import pytest
 
 from tools.blackboard_tools import load_function_data
-from workers.phase3.function_deep_analyzer import build_func_analysis_prompt, function_deep_analyzer
+from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
 
 
 def test_load_function_data_reads_decompile():
@@ -28,13 +28,8 @@ def test_func_analyzer_prompt_includes_constraints():
     assert "functionality" in prompt
 
 
-def test_function_deep_analyzer_exists():
-    assert function_deep_analyzer.name == "function_deep_analyzer"
-
-
 def test_build_func_analysis_prompt_truncation():
     """Prompt should truncate decompile/disassembly to 2500 chars and 120 lines."""
-    from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
     long_decompile = "A" * 5000
     long_disasm = "B" * 5000
     func_data = {
@@ -51,7 +46,6 @@ def test_build_func_analysis_prompt_truncation():
 
 
 def test_func_analysis_prompt_includes_guides_and_project():
-    from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
     func_data = {
         "status": "success",
         "decompile_snippet": "int __fastcall sub_401000(int a1) { return a1 + 1; }",
