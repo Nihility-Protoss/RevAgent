@@ -1,6 +1,6 @@
 """Token usage statistics collection for analysis runs."""
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 @dataclass
@@ -12,13 +12,11 @@ class StageTokenStats:
     total_tokens: int = 0
     call_count: int = 0
 
-    def add_usage(self, usage_metadata: Optional[Any]) -> None:
-        """Add usage metadata from a single LLM call."""
-        if usage_metadata is None:
-            return
-        self.prompt_tokens += getattr(usage_metadata, 'promptTokenCount', 0) or 0
-        self.candidate_tokens += getattr(usage_metadata, 'candidatesTokenCount', 0) or 0
-        self.total_tokens += getattr(usage_metadata, 'totalTokenCount', 0) or 0
+    def add_usage(self, prompt_tokens: int, candidate_tokens: int, total_tokens: int) -> None:
+        """Add token usage from a single LLM call."""
+        self.prompt_tokens += prompt_tokens
+        self.candidate_tokens += candidate_tokens
+        self.total_tokens += total_tokens
         self.call_count += 1
 
 
@@ -32,25 +30,15 @@ class AnalysisTokenReport:
     total_tokens: int = 0
     total_llm_calls: int = 0
 
-    def add_event_usage(self, event) -> None:
-        """Process an ADK Event and extract token usage."""
-        if not hasattr(event, 'usageMetadata') or event.usageMetadata is None:
-            return
-
-        # Determine stage from event node info
-        stage_name = "unknown"
-        if hasattr(event, 'nodeInfo') and event.nodeInfo:
-            stage_name = event.nodeInfo.node_name or "unknown"
-
+    def add_usage(self, stage_name: str, prompt_tokens: int, candidate_tokens: int, total_tokens: int) -> None:
+        """Aggregate one LLM call's token usage under the given stage/node name."""
+        stage_name = stage_name or "unknown"
         if stage_name not in self.stages:
             self.stages[stage_name] = StageTokenStats(stage_name=stage_name)
-
-        self.stages[stage_name].add_usage(event.usageMetadata)
-
-        # Update totals
-        self.total_prompt_tokens += getattr(event.usageMetadata, 'promptTokenCount', 0) or 0
-        self.total_candidate_tokens += getattr(event.usageMetadata, 'candidatesTokenCount', 0) or 0
-        self.total_tokens += getattr(event.usageMetadata, 'totalTokenCount', 0) or 0
+        self.stages[stage_name].add_usage(prompt_tokens, candidate_tokens, total_tokens)
+        self.total_prompt_tokens += prompt_tokens
+        self.total_candidate_tokens += candidate_tokens
+        self.total_tokens += total_tokens
         self.total_llm_calls += 1
 
     def to_dict(self) -> Dict[str, Any]:
