@@ -12,7 +12,7 @@
 
 - **静态分析为主**：不直接运行可疑二进制，输入是分析师从 IDA 导出的文本产物（`strings.txt`、`imports.txt`、`exports.txt`、`function_index.txt`，以及可选的 `decompile/`、`disassembly/`）。
 - **分阶段递进**：Phase -1 预提取 → Phase 0 快速定性（3 Worker 并行）→ Phase 1 行为定型 + 函数筛选（2 Worker 并行）→ Phase 2 调度 + 人工审查（HITL）→ Phase 3 函数级深度分析（节点内串行循环）→ Phase 4 综合报告（Map-Reduce）。
-- **黑板（Blackboard）上下文管理**：通过 `.blackboard/{project_name}/` 持久化 `extracts/`、`artifacts/`、`summary/`、`meta/`，实现断点续跑和摘要级通信，避免小模型上下文溢出。
+- **黑板（Blackboard）上下文管理**：通过 `data/output/{project_name}/` 持久化 `extracts/`、`artifacts/`、`summary/`、`meta/`，实现断点续跑和摘要级通信，避免小模型上下文溢出。
 - **Token 可观测**：完整统计每个阶段/每个节点的 prompt/candidate/total tokens。
 
 项目名：`multi-agent-adk`（`pyproject.toml`）。版本 `0.1.0`，要求 Python `>=3.10`。
@@ -40,6 +40,7 @@
 - `BASE_URL`（默认 `https://api.deepseek.com/v1`）
 - `MODEL`（默认 `deepseek-flash`）
 - `THINKING`（默认 `disabled`；思考模式与 Worker 结构化输出的强制 `tool_choice` 不兼容，只有端点支持时才改为 `enabled`）
+- `MAX_CONTEXT_TOKENS`（默认 `128000`；所有 agent 单次调用的输入 token 上限）
 
 `graph_nodes.get_llm()` 使用 `init_chat_model(MODEL, model_provider="openai", api_key=API_KEY, base_url=BASE_URL, extra_body={"thinking": {"type": THINKING}})` 构造模型，**不再需要 `GOOGLE_API_KEY`**。测试用 `graph_nodes.set_llm(fake)` 或 `build_graph(llm=fake)` 注入假模型。
 
@@ -91,7 +92,9 @@ multi-agent-adk/
 │   └── phase4/
 │       └── synthesis_agent.py        # 分片综合 / 聚合 prompt
 ├── tests/                            # 测试集（编排层通过假模型注入 + graph.ainvoke 离线运行）
-├── data/module.upx_export_for_ai/    # 示例 fixture（IDA 导出产物）
+├── data/
+│   ├── input/module.upx_export_for_ai/  # 示例 fixture（IDA 导出产物，自动发现输入）
+│   └── output/                          # 黑板输出根目录（{project_name}/{extracts,artifacts,summary,meta}）
 └── docs/
     ├── RevAgent_LangGraph迁移方案.md  # ADK → LangGraph 迁移方案
     └── architecture/                 # 架构图示（HTML/PNG，历史产物）
@@ -106,11 +109,11 @@ multi-agent-adk/
 4. 输出格式约束（强制 JSON）
 5. 置信度与误差控制
 
-框架层定义在 `workers/specs.py`：每个 Worker 是一个 **`WorkerSpec` frozen dataclass**（`name` / `instruction` / `tools` / `output_key` / `output_schema`），共 6 个 spec（5 个 worker + scheduler）。Worker 不再直接是 Agent 实例，而是由 `graph_nodes.make_worker_node(spec, llm)` 编译为 LangGraph 节点函数：节点内 `create_agent`（ReAct 循环 + `response_format` 结构化输出，失败回退 `parse_json_loose` 容错解析），执行后同一节点内完成 `bb_write_artifact` + extractor 摘要持久化，最终返回 `{output_key: payload}` 写入图状态。每个 worker 声明最小工具集（2–4 个），不再有 ALL_TOOLS 全量注入。
+框架层定义在 `workers/specs.py`：每个 Worker 是一个 **`WorkerSpec` frozen dataclass**（`name` / `instruction` / `tools` / `output_key` / `output_schema`），共 6 个 spec（5 个 worker + scheduler）。Worker 不再直接是 Agent 实例，而是由 `graph_nodes.make_worker_node(spec, llm)` 编译为 LangGraph 节点函数：节点内 `create_agent`（ReAct 循环 + `response_format` 结构化输出，失败回退 `parse_json_loose` 容错解析 + `SummarizationMiddleware` 上下文压缩），执行后同一节点内完成 `bb_write_artifact` + extractor 摘要持久化，最终返回 `{output_key: payload}` 写入图状态。每个 worker 声明最小工具集（2–4 个），不再有 ALL_TOOLS 全量注入。
 
 ### 3.2 黑板数据流（实际已落地）
 
-- **Phase -1**（`pre_extract_node` 调 `pre_extract_sample`）：把 `strings.txt` / `imports.txt` / `exports.txt` / `function_index.txt` 解析为 `.blackboard/{project}/extracts/*.json`；`resume=True` 且存在 checkpoint 时整个节点跳过。
+- **Phase -1**（`pre_extract_node` 调 `pre_extract_sample`）：把 `strings.txt` / `imports.txt` / `exports.txt` / `function_index.txt` 解析为 `data/output/{project}/extracts/*.json`；随后调用 `detect_sample_type` 自动判定样本类型并写入图状态（`sample_type` 永远 auto，不由 CLI 传入）；`resume=True` 且存在 checkpoint 时整个节点跳过。
 - **Phase 0 Worker** 读取 `extracts/` 分片 → 输出完整 artifact 到 `artifacts/p0_*_{timestamp}.json` → extractor 提炼 `summary/{strings,api,exports}_summary.json`（硬约束 ≤1500 tokens）。
 - **知识指南门控（Phase 0→1）**：Phase 0 字符串分析输出 `arch_detection`；`graph_nodes.resolve_guides_node` 据此匹配知识库并写入 `meta/active_guides.json`。Phase 1 经 `load_arch_guide("__active__")` 按需加载，Phase 3 注入函数分析 prompt。
 - **Phase 1 Worker** 读取 `summary/` + `extracts/` → 输出 `artifacts/p1_*_{timestamp}.json` → 再提炼为 `summary/`。
@@ -149,15 +152,14 @@ MODEL=deepseek-flash
 
 ```bash
 source .venv/bin/activate
+# 输入放 data/input/ 下的 *_export_for_ai 目录，自动发现
 python main.py \
-    -e /path/to/ida/export \   # --export-dir
-    -p sample_001 \            # --project-name
-    -t pe                      # --sample-type，可选，默认 auto
-    # -w /path/to/work         # --work-dir，可选，.blackboard/ 存放位置
-    # -r                       # --resume，可选，断点续跑
+    -p sample_001 \            # --project-name：data/output/ 子目录名
+    # -i module.upx            # --input-name：可选，指定导出目录（可省略 _export_for_ai 后缀）
+    # -r                       # --resume：可选，断点续跑
 ```
 
-`--export-dir` / `--project-name` 也可用同名环境变量 `EXPORT_DIR` / `PROJECT_NAME` 提供。所有长参数均有短 flag：`-e` / `-p` / `-w` / `-t` / `-r`。
+输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用。`--project-name` / `--input-name` 也可用环境变量 `PROJECT_NAME` / `INPUT_NAME` 提供。不再需要 `--export-dir` / `--work-dir` / `--sample-type`：样本类型永远 auto，由 `pre_extract` 节点调 `detect_sample_type` 判定。
 
 **程序化调用（带黑板与断点）**
 
@@ -166,9 +168,8 @@ import asyncio
 from main import run_analysis_with_blackboard
 
 final_state, token_report = asyncio.run(run_analysis_with_blackboard(
-    sample_export_dir="/path/to/ida/export",
     sample_project_name="sample_001",
-    sample_type="auto",
+    # input_name="module.upx",  # 可选：指定 data/input/ 下的导出目录
     resume=False,
 ))
 ```
@@ -186,7 +187,7 @@ pytest -k "not fixture"   # 或手动跳过缺失 data/ 的情况
 pytest -v
 ```
 
-测试全部使用临时目录，不会污染仓库；依赖 `data/module.upx_export_for_ai/` 的测试会在 fixture 缺失时自动 `pytest.skip`。
+测试全部使用临时目录，不会污染仓库；依赖 `data/input/module.upx_export_for_ai/` 的测试会在 fixture 缺失时自动 `pytest.skip`。
 
 ---
 
@@ -197,12 +198,13 @@ pytest -v
 - **类型提示**：使用 `typing`（`Dict`, `List`, `Any`, `Optional`）或 3.10+ 的 `|` 联合类型（当前代码两种都有）。
 - **错误处理**：Tool 函数统一返回 `{"status": "success|error", "error": None|str, ...}`，禁止直接抛出异常给上层；纯函数节点（如 `pre_extract_node`）允许抛出 `RuntimeError` 中止整轮分析。
 - **JSON 输出**：写入文件时统一使用 `ensure_ascii=False, indent=2`。
-- **路径**：使用 `pathlib.Path` 或 `os.path.join`，跨平台兼容；黑板路径全部基于当前工作目录下的 `.blackboard/`。
+- **路径**：使用 `pathlib.Path` 或 `os.path.join`，跨平台兼容；黑板路径全部基于当前工作目录下的 `data/output/`（由 `tools.blackboard_tools.board_base_dir()` 决定，可用 `BOARD_BASE_DIR` 环境变量覆盖）。
 - **命名**：
   - Worker 模块：`{purpose}_{role}.py`，WorkerSpec `name` 与模块名一致。
   - `output_key` 规范：`string_analysis`、`api_behavior_analysis`、`export_interface_analysis`、`behavior_profile`、`function_boundary_analysis`、`scheduler_decision`；Phase 4 结果不落 state 原文，只写 `final_report_ref`（`bb://summary/p4_final_report`）。
   - 黑板 summary 名：`strings_summary`、`api_summary`、`exports_summary`、`behavior_summary`、`functions_summary`、`p2_decision`、`p4_final_report`。
 - **Token 预算**：
+  - 所有 agent 单次 LLM 调用输入上限 128k tokens（`MAX_CONTEXT_TOKENS` 可覆盖）：Worker ReAct 循环由 `SummarizationMiddleware` 在 75% 阈值触发摘要压缩；extractor / Phase 3 / Phase 4 的直接调用统一走 `graph_nodes.invoke_guarded`（超限先头尾保留式截断，仍超限抛 `RuntimeError`）；
   - Worker 输出 artifact 无明确上限；
   - Extractor 产出 summary 必须 ≤1500 tokens（`blackboard_tools.bb_write_summary` 会硬拦截）；
   - Phase 3 函数分析 prompt 要求模型输出 ≤1000 tokens。
@@ -218,9 +220,9 @@ pytest -v
   - `test_workers.py` / `test_extractor.py` / `test_phase3.py` / `test_phase4.py`：验证 WorkerSpec 存在、名称、output_key、prompt 包含必要字段。
   - `test_knowledge.py`：验证知识库注册表、token 预算、`__active__` 解析、`match_guides` 路由。
 - **集成测试**：
-  - `test_integration.py`：验证 `build_graph` 图结构、`graph.ainvoke` 端到端编排（假模型注入）、TokenStatsCallback 报告统计、approval_gate HITL 协议解析、预提取生成 `.blackboard/` 目录结构。
+  - `test_integration.py`：验证 `build_graph` 图结构、`graph.ainvoke` 端到端编排（假模型注入）、TokenStatsCallback 报告统计、approval_gate HITL 协议解析、预提取生成 `data/output/` 目录结构、上下文预算截断。
   - `test_fault_tolerance.py`：验证失败后的状态恢复和摘要大小拒绝。
-- **Fixture**：`data/module.upx_export_for_ai/` 提供真实的 IDA 导出数据，用于测试 `pre_extract_sample`、`load_function_data` 和目录结构。缺失时自动跳过。
+- **Fixture**：`data/input/module.upx_export_for_ai/` 提供真实的 IDA 导出数据，用于测试 `pre_extract_sample`、`load_function_data` 和目录结构。缺失时自动跳过。
 - **Mock**：LLM 调用在测试中全部通过假模型完成（`graph_nodes.set_llm(fake)` 或 `build_graph(llm=fake)`，配合 LangChain `FakeListChatModel` / 自定义 fake chat model），**不会在测试里消耗真实 API token**。
 
 ---
@@ -230,7 +232,7 @@ pytest -v
 - **恶意样本**：项目是分析工具，但当前实现只处理**静态文本导出**，不会执行原始二进制。不要在本项目代码中引入自动执行样本或自动下载 Payload 的逻辑。
 - **API Key**：`.env` 已加入 `.gitignore`，Agent 不应读取或修改 `.env`；若需要新增环境变量，应提醒用户在本地 `.env` 中自行配置。
 - **HITL（人在回路）**：Phase 2 结束后 `approval_gate` 节点会在 CLI 阻塞等待人工输入，必须回复 `CONFIRM` 或 `MODIFY <addr1>,<addr2>,...` 才会继续 Phase 3（3 次无效输入默认 CONFIRM 放行）。不要绕过该节点自动继续。
-- **数据残留**：运行时会生成 `.blackboard/`、`.pytest_cache/`。这些目录均已 gitignore，部署或打包时无需包含。
+- **数据残留**：运行时会生成 `data/output/`、`.pytest_cache/`。`data/` 与 `.pytest_cache/` 均已 gitignore，部署或打包时无需包含。
 - **URL/IOC 处理**：Worker 可能从样本中提取 C2 URL、文件路径等敏感 IoC。黑板中的 artifact/summary 应被视为敏感分析数据，按组织安全策略保管。
 
 ---
@@ -257,7 +259,7 @@ pytest -v
 | 新增一个 Phase 0/1 Worker | `workers/phaseX/` 新增提示词模块，在 `workers/specs.py` 声明 WorkerSpec，在 `graph.py` 加节点与边 |
 | 调整 Worker 提示词 | 直接修改对应 `workers/phaseX/xxx.py` 中的 `INSTRUCTION` 常量（无需动 specs.py） |
 | 新增文件加载 Tool | `tools/file_loaders.py` 实现，加入对应 `workers/specs.py` 中 WorkerSpec 的 `tools` 元组 |
-| 修改黑板目录结构 | `tools/blackboard_tools.py` 中的 `_board_path` 和 `_ensure_dirs` |
+| 修改黑板目录结构 | `tools/blackboard_tools.py` 中的 `board_base_dir` 和 `_ensure_dirs` |
 | 新增样本类型（LNK/ELF） | 新增 `workers/optional/` 提示词 + spec，在 `detect_sample_type` 和 `graph.py` 中动态加载 |
 | 修改 Token 统计字段 | `tools/token_stats.py` 中的 `StageTokenStats` / `AnalysisTokenReport`；节点归属逻辑在 `observability.py` |
 | 调整图结构 / 编排 | `graph.py`（加边/加节点）与 `graph_nodes.py`（节点工厂与业务节点实现） |

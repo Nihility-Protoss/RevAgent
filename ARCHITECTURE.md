@@ -173,7 +173,7 @@ Worker 的工具面从旧的 ALL_TOOLS 全量注入收敛为每个 WorkerSpec �
 | `bb_read_summary` | 读取黑板 `summary/` 摘要 | Behavior Synthesizer, Scheduler |
 | `load_arch_guide` | 加载知识指南（`load_knowledge` 的别名工具） | Function Detector |
 | `load_pe_info` | 加载预生成的 `pe_info.json` | —（预留） |
-| `detect_sample_type` | 基于导出文件判断样本类型 | —（预留） |
+| `detect_sample_type` | 基于导出文件判断样本类型 | `pre_extract` 节点直接调用（非 Worker 工具） |
 | `calculate_entropy` | 计算 Shannon 熵 | —（预留） |
 
 > 黑板写入类工具（`bb_write_artifact` / `bb_write_summary` / `bb_checkpoint` / `bb_log_event` / `load_function_data`）不暴露给 Worker Agent，由节点函数（`make_worker_node` / `make_phase3_node` / Phase 4 节点）在 LLM 调用之外直接调用，负责 artifact/summary 持久化与断点。
@@ -208,9 +208,9 @@ Agent 接收一个**样本导出目录**作为输入：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `sample_project_name` | str | 项目名（黑板子目录名） |
-| `sample_export_dir` | str | IDA 导出目录路径 |
-| `sample_type` | str | 样本类型（pe/lnk/elf/auto） |
+| `sample_project_name` | str | 项目名（`data/output/` 子目录名） |
+| `sample_export_dir` | str | IDA 导出目录路径（默认由 `data/input/` 下的 `*_export_for_ai` 自动解析） |
+| `sample_type` | str | 样本类型（永远 auto：由 `pre_extract` 节点调 `detect_sample_type` 判定后写入） |
 | `resume` | bool | True 时 pre_extract 节点跳过（黑板已有 checkpoint） |
 
 **Worker 结构化输出**（WorkerSpec `output_key` 同名直译，dict 或 Pydantic model_dump）：
@@ -242,14 +242,20 @@ Agent 接收一个**样本导出目录**作为输入：
 
 ```python
 final_state, token_report = await run_analysis_with_blackboard(
-    sample_export_dir="/path/to/export",
-    sample_project_name="sample_001",
+    sample_project_name="sample_001",  # 输入自动解析自 data/input/
 )
 
 print(token_report.total_tokens)        # 总 token
 print(token_report.stages["scheduler"]) # StageTokenStats(...)
 print(str(token_report))                # 人类可读报告
 ```
+
+### 5.3 上下文预算（128k）
+
+所有 agent 的单次 LLM 调用输入上限为 **128k tokens**（`MAX_CONTEXT_TOKENS` 环境变量可覆盖）：
+
+- **Worker（ReAct 循环）**：`create_agent` 挂 `SummarizationMiddleware`，历史消息估算超过 128k 的 75% 时自动摘要压缩，保留最近 20 条消息。
+- **直接 LLM 调用**（extractor / Phase 3 / Phase 4）：统一走 `graph_nodes.invoke_guarded`，调用前 `enforce_context_budget` 估算 token，超限时从最长消息开始头尾保留式截断，截断后仍超限则抛 `RuntimeError`。
 
 ---
 
@@ -293,6 +299,10 @@ multi-agent-adk/
 ├── docs/
 │   ├── RevAgent_LangGraph迁移方案.md  # ADK → LangGraph 迁移方案
 │   └── architecture/                 # 架构图示（HTML/PNG，历史产物）
+├── data/
+│   ├── input/                        # 输入：放置 *_export_for_ai 的 IDA 导出目录（自动发现）
+│   │   └── module.upx_export_for_ai/ # 示例 fixture
+│   └── output/                       # 输出（黑板）：{project_name}/{extracts,artifacts,summary,meta}
 └── tests/                            # 测试（编排层通过假模型注入 + graph.ainvoke 离线运行）
 ```
 
@@ -359,15 +369,14 @@ export API_KEY="your-key"
 export BASE_URL="https://api.deepseek.com/v1"
 export MODEL="deepseek-flash"
 
+# 输入放 data/input/ 下的 *_export_for_ai 目录，自动发现
 python main.py \
-    --export-dir /path/to/ida/export \
-    --project-name malware_sample_001 \
-    --sample-type pe            # 可选，默认 auto
-    # --work-dir /path/to/work  # 可选，.blackboard/ 存放位置
-    # --resume                  # 可选，断点续跑（跳过 Phase -1）
+    -p malware_sample_001      # --project-name：data/output/ 子目录名
+    # -i module.upx            # --input-name：可选，指定 data/input/ 下的导出目录（可省略 _export_for_ai 后缀）
+    # -r                       # --resume：可选，断点续跑（跳过 Phase -1）
 ```
 
-`--export-dir` / `--project-name` 也可通过同名环境变量 `EXPORT_DIR` / `PROJECT_NAME` 提供。
+输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用；多个候选且无法确定时报错并列出候选。`--project-name` 也可通过环境变量 `PROJECT_NAME` 提供，`--input-name` 对应 `INPUT_NAME`。样本类型永远 auto，由 `pre_extract` 节点调用 `detect_sample_type` 判定。
 
 ### 9.2 程序化调用
 
@@ -376,9 +385,8 @@ import asyncio
 from main import run_analysis_with_blackboard
 
 final_state, token_report = asyncio.run(run_analysis_with_blackboard(
-    sample_export_dir="/path/to/ida/export",
     sample_project_name="malware_sample_001",
-    sample_type="pe",
+    # input_name="module.upx",  # 可选：指定 data/input/ 下的导出目录
     resume=False,
 ))
 ```
