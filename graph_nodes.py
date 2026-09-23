@@ -43,6 +43,9 @@ def get_llm():
     global _LLM
     if _LLM is None:
         load_dotenv()
+        # 思考模式与 create_agent 的强制 tool_choice（结构化输出）不兼容，
+        # 默认关闭；需要思考模式时在 .env 设 THINKING=enabled。
+        thinking = os.getenv("THINKING", "disabled")
         _LLM = init_chat_model(
             os.getenv("MODEL", "deepseek-flash"),
             model_provider="openai",
@@ -50,6 +53,7 @@ def get_llm():
             base_url=os.getenv("BASE_URL", "https://api.deepseek.com/v1"),
             temperature=0,
             max_retries=3,
+            extra_body={"thinking": {"type": thinking}},
         )
     return _LLM
 

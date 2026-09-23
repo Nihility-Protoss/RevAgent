@@ -23,7 +23,6 @@ venv/
 .env
 
 # Other
-.adk/
 data/
 uv.lock
 

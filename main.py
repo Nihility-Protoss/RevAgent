@@ -54,24 +54,37 @@ async def run_analysis_with_blackboard(
 def main() -> None:
     parser = argparse.ArgumentParser(description="RevAgent 恶意样本静态分析系统（LangGraph）")
     parser.add_argument(
+        "-e",
         "--export-dir",
         default=os.getenv("EXPORT_DIR"),
         required=os.getenv("EXPORT_DIR") is None,
         help="IDA 导出目录（含 strings.txt/imports.txt/exports.txt/function_index.txt）",
     )
     parser.add_argument(
+        "-p",
         "--project-name",
         default=os.getenv("PROJECT_NAME"),
         required=os.getenv("PROJECT_NAME") is None,
         help="项目存档名（.blackboard/ 子目录名）",
     )
     parser.add_argument(
+        "-w",
         "--work-dir",
         default=os.getenv("WORK_DIR", "."),
         help="工作目录（.blackboard/ 存放位置，默认当前目录）",
     )
-    parser.add_argument("--sample-type", default="auto", help="样本类型 (pe/lnk/elf/auto)")
-    parser.add_argument("--resume", action="store_true", help="从黑板 checkpoint 断点续跑")
+    parser.add_argument(
+        "-t",
+        "--sample-type",
+        default="auto",
+        help="样本类型 (pe/lnk/elf/auto)",
+    )
+    parser.add_argument(
+        "-r",
+        "--resume",
+        action="store_true",
+        help="从黑板 checkpoint 断点续跑",
+    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.export_dir):

@@ -44,13 +44,16 @@ def bb_read_extract(extract_name: str, project_name: str, chunk_index: int = 0) 
         data["has_more"] = end < len(all_items)
     elif "chunk_size" in data and "by_category" in data:
         chunk_size = data.get("chunk_size", 100)
-        for cat, items in data.get("by_category", {}).items():
-            start = chunk_index * chunk_size
-            end = start + chunk_size
+        # by_type 是全量未分片副本（与 by_category 内容重复），每次调用都返回
+        # 会把整张字符串表塞进 ReAct 上下文导致 token 爆炸，这里直接剔除。
+        data.pop("by_type", None)
+        all_cats = data.get("by_category", {})
+        start = chunk_index * chunk_size
+        end = start + chunk_size
+        data["has_more"] = any(len(items) > end for items in all_cats.values())
+        for cat, items in all_cats.items():
             data["by_category"][cat] = items[start:end]
         data["chunk_index"] = chunk_index
-        total_remaining = sum(len(items) for items in data.get("by_category", {}).values())
-        data["has_more"] = total_remaining > 0
 
     return {"status": "success", "data": data}
 

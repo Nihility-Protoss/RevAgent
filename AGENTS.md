@@ -39,8 +39,9 @@
 - `API_KEY`（必填）
 - `BASE_URL`（默认 `https://api.deepseek.com/v1`）
 - `MODEL`（默认 `deepseek-flash`）
+- `THINKING`（默认 `disabled`；思考模式与 Worker 结构化输出的强制 `tool_choice` 不兼容，只有端点支持时才改为 `enabled`）
 
-`graph_nodes.get_llm()` 使用 `init_chat_model(MODEL, model_provider="openai", api_key=API_KEY, base_url=BASE_URL)` 构造模型，**不再需要 `GOOGLE_API_KEY`**。测试用 `graph_nodes.set_llm(fake)` 或 `build_graph(llm=fake)` 注入假模型。
+`graph_nodes.get_llm()` 使用 `init_chat_model(MODEL, model_provider="openai", api_key=API_KEY, base_url=BASE_URL, extra_body={"thinking": {"type": THINKING}})` 构造模型，**不再需要 `GOOGLE_API_KEY`**。测试用 `graph_nodes.set_llm(fake)` 或 `build_graph(llm=fake)` 注入假模型。
 
 ### 2.3 pytest 配置
 
@@ -149,14 +150,14 @@ MODEL=deepseek-flash
 ```bash
 source .venv/bin/activate
 python main.py \
-    --export-dir /path/to/ida/export \
-    --project-name sample_001 \
-    --sample-type pe            # 可选，默认 auto
-    # --work-dir /path/to/work  # 可选，.blackboard/ 存放位置
-    # --resume                  # 可选，断点续跑
+    -e /path/to/ida/export \   # --export-dir
+    -p sample_001 \            # --project-name
+    -t pe                      # --sample-type，可选，默认 auto
+    # -w /path/to/work         # --work-dir，可选，.blackboard/ 存放位置
+    # -r                       # --resume，可选，断点续跑
 ```
 
-`--export-dir` / `--project-name` 也可用同名环境变量 `EXPORT_DIR` / `PROJECT_NAME` 提供。
+`--export-dir` / `--project-name` 也可用同名环境变量 `EXPORT_DIR` / `PROJECT_NAME` 提供。所有长参数均有短 flag：`-e` / `-p` / `-w` / `-t` / `-r`。
 
 **程序化调用（带黑板与断点）**
 
