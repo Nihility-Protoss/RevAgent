@@ -2,15 +2,22 @@ import os
 import json
 from typing import Dict, Any, Optional
 
+from config import cfg
 from tools.blackboard_tools import board_base_dir
 
-# 输入根目录：data/input 下按 *_export_for_ai 命名存放 IDA 导出产物
+# 输入根目录默认值：data/input 下按 *_export_for_ai 命名存放 IDA 导出产物
 DEFAULT_INPUT_ROOT = os.path.join("data", "input")
 EXPORT_DIR_SUFFIX = "_export_for_ai"
 
 
-def find_export_dirs(input_root: str = DEFAULT_INPUT_ROOT) -> list:
+def default_input_root() -> str:
+    """输入根目录：config.yaml paths.input_root（默认 data/input）。"""
+    return cfg("paths.input_root", env="INPUT_ROOT", default=DEFAULT_INPUT_ROOT)
+
+
+def find_export_dirs(input_root: Optional[str] = None) -> list:
     """列出 input_root 下所有 *_export_for_ai 目录名（排序后）。"""
+    input_root = input_root or default_input_root()
     if not os.path.isdir(input_root):
         return []
     return sorted(
@@ -24,7 +31,7 @@ def find_export_dirs(input_root: str = DEFAULT_INPUT_ROOT) -> list:
 def resolve_export_dir(
     project_name: Optional[str] = None,
     input_name: Optional[str] = None,
-    input_root: str = DEFAULT_INPUT_ROOT,
+    input_root: Optional[str] = None,
 ) -> dict:
     """按规则自动定位 data/input 下的 *_export_for_ai 导出目录。
 
@@ -34,6 +41,7 @@ def resolve_export_dir(
     Returns:
         Dict with status, export_dir, candidates.
     """
+    input_root = input_root or default_input_root()
     candidates = find_export_dirs(input_root)
     if not candidates:
         return {

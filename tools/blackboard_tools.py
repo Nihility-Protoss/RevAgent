@@ -2,10 +2,12 @@ import os
 import json
 from typing import Dict, Any, Optional
 
+from config import cfg
+
 
 def board_base_dir() -> str:
-    """黑板根目录：默认 data/output（可用 BOARD_BASE_DIR 环境变量覆盖）。"""
-    return os.getenv("BOARD_BASE_DIR", os.path.join("data", "output"))
+    """黑板根目录：config.yaml paths.output_root（默认 data/output）。"""
+    return cfg("paths.output_root", env="BOARD_BASE_DIR", default=os.path.join("data", "output"))
 
 
 def board_path(project_name: str, *subpaths: str) -> str:

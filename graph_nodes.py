@@ -15,6 +15,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages.utils import convert_to_messages, count_tokens_approximately
 from langchain_core.runnables import RunnableConfig
 
+from config import cfg, cfg_int
 from state import AnalysisState
 from tools.blackboard_tools import (
     _now_iso,
@@ -42,21 +43,20 @@ _LLM = None
 
 
 def get_llm():
-    """Return the shared chat model (OpenAI-compatible endpoint via env vars)."""
+    """Return the shared chat model (config.yaml > env vars > defaults)."""
     global _LLM
     if _LLM is None:
         load_dotenv()
         # 思考模式与 create_agent 的强制 tool_choice（结构化输出）不兼容，
-        # 默认关闭；需要思考模式时在 .env 设 THINKING=enabled。
-        thinking = os.getenv("THINKING", "disabled")
+        # 默认关闭；需要思考模式时在 config.yaml 设 llm.thinking=enabled。
         _LLM = init_chat_model(
-            os.getenv("MODEL", "deepseek-flash"),
+            cfg("llm.model", env="MODEL", default="deepseek-flash"),
             model_provider="openai",
-            api_key=os.getenv("API_KEY"),
-            base_url=os.getenv("BASE_URL", "https://api.deepseek.com/v1"),
+            api_key=cfg("llm.api_key", env="API_KEY"),
+            base_url=cfg("llm.base_url", env="BASE_URL", default="https://api.deepseek.com/v1"),
             temperature=0,
             max_retries=3,
-            extra_body={"thinking": {"type": thinking}},
+            extra_body={"thinking": {"type": cfg("llm.thinking", env="THINKING", default="disabled")}},
         )
     return _LLM
 
@@ -70,8 +70,8 @@ def set_llm(llm) -> None:
 # === 上下文预算（所有 agent 共享 128k 上限）===
 
 def max_context_tokens() -> int:
-    """单次 LLM 调用的输入 token 上限（默认 128k，可用 MAX_CONTEXT_TOKENS 覆盖）。"""
-    return int(os.getenv("MAX_CONTEXT_TOKENS", "128000"))
+    """单次 LLM 调用的输入 token 上限（config.yaml llm.max_context_tokens，默认 128k）。"""
+    return cfg_int("llm.max_context_tokens", env="MAX_CONTEXT_TOKENS", default=128000)
 
 
 # ReAct 循环内历史超过该阈值即触发摘要压缩（留 ~25% 余量给输出与系统提示）

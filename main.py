@@ -65,29 +65,38 @@ async def run_analysis_with_blackboard(
 
 
 def main() -> None:
+    from config import cfg, cfg_bool
+
+    # 默认值来源：config.yaml > 环境变量；CLI 显式传参始终优先
+    default_project = cfg("analysis.project_name", env="PROJECT_NAME")
+    default_input = cfg("analysis.input_name", env="INPUT_NAME")
+    default_resume = cfg_bool("analysis.resume", env="RESUME", default=False)
+
     parser = argparse.ArgumentParser(
         description="RevAgent 恶意样本静态分析系统（LangGraph）。"
         "自动分析 data/input/ 下的 *_export_for_ai 目录，结果写入 data/output/<project-name>/。"
+        "默认参数读取根目录 config.yaml，CLI 传参优先。"
     )
     parser.add_argument(
         "-p",
         "--project-name",
-        default=os.getenv("PROJECT_NAME"),
-        required=os.getenv("PROJECT_NAME") is None,
-        help="项目存档名（data/output/ 子目录名）",
+        default=default_project,
+        required=default_project is None,
+        help="项目存档名（data/output/ 子目录名；默认取 config.yaml analysis.project_name）",
     )
     parser.add_argument(
         "-i",
         "--input-name",
-        default=os.getenv("INPUT_NAME"),
+        default=default_input,
         help="data/input/ 下的导出目录名（可省略 _export_for_ai 后缀；"
-        "默认按 project-name 前缀或唯一候选自动匹配）",
+        "默认取 config.yaml analysis.input_name，缺省按 project-name 前缀或唯一候选自动匹配）",
     )
     parser.add_argument(
         "-r",
         "--resume",
         action="store_true",
-        help="从黑板 checkpoint 断点续跑",
+        default=default_resume,
+        help="从黑板 checkpoint 断点续跑（默认取 config.yaml analysis.resume）",
     )
     args = parser.parse_args()
 
