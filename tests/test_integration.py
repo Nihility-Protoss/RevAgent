@@ -600,3 +600,43 @@ def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
     assert "summary" in final_state["func_analysis_refs"][0]
     assert final_state["final_report_ref"] == "bb://summary/p4_final_report"
 
+
+# === Context budget (128k) ================================================
+
+def test_enforce_context_budget_passthrough():
+    """Small prompts are returned untouched (normalized to messages)."""
+    from graph_nodes import enforce_context_budget
+    messages = [("system", "sys"), ("user", "hello")]
+    result = enforce_context_budget(messages)
+    assert len(result) == 2
+    assert result[1].content == "hello"
+
+
+def test_enforce_context_budget_truncates_oversized(monkeypatch):
+    """A single oversized message gets truncated to fit the budget."""
+    from graph_nodes import enforce_context_budget
+    monkeypatch.setenv("MAX_CONTEXT_TOKENS", "2000")
+    big = "A" * 40000  # ~10k tokens，远超 2000 的预算
+    result = enforce_context_budget([("user", big)])
+    assert len(result) == 1
+    assert "已截断" in result[0].content
+    assert len(result[0].content) < len(big)
+    # 头尾证据保留
+    assert result[0].content.startswith("AAA")
+    assert result[0].content.endswith("AAA")
+
+
+def test_enforce_context_budget_raises_when_impossible(monkeypatch):
+    """Budget too small to hold anything must raise a clear error."""
+    from graph_nodes import enforce_context_budget
+    monkeypatch.setenv("MAX_CONTEXT_TOKENS", "1")
+    with pytest.raises(RuntimeError, match="上下文上限"):
+        enforce_context_budget([("user", "x" * 4000)])
+
+
+def test_max_context_tokens_default(monkeypatch):
+    from graph_nodes import max_context_tokens
+    monkeypatch.delenv("MAX_CONTEXT_TOKENS", raising=False)
+    assert max_context_tokens() == 128000
+    monkeypatch.setenv("MAX_CONTEXT_TOKENS", "64000")
+    assert max_context_tokens() == 64000

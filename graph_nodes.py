@@ -10,7 +10,9 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
 from langchain.chat_models import init_chat_model
+from langchain_core.messages.utils import convert_to_messages, count_tokens_approximately
 from langchain_core.runnables import RunnableConfig
 
 from state import AnalysisState
@@ -65,6 +67,70 @@ def set_llm(llm) -> None:
     _LLM = llm
 
 
+# === 上下文预算（所有 agent 共享 128k 上限）===
+
+def max_context_tokens() -> int:
+    """单次 LLM 调用的输入 token 上限（默认 128k，可用 MAX_CONTEXT_TOKENS 覆盖）。"""
+    return int(os.getenv("MAX_CONTEXT_TOKENS", "128000"))
+
+
+# ReAct 循环内历史超过该阈值即触发摘要压缩（留 ~25% 余量给输出与系统提示）
+def _summary_trigger_tokens() -> int:
+    return int(max_context_tokens() * 0.75)
+
+
+def enforce_context_budget(messages: list) -> list:
+    """Trim message contents so the total estimate fits the context budget.
+
+    Strategy: truncate the longest message contents first (middle of the text,
+    keeping head and tail); raise RuntimeError if still over budget.
+    """
+    budget = max_context_tokens()
+    normalized = convert_to_messages(messages)
+
+    for _round in range(3):
+        total = count_tokens_approximately(normalized)
+        if total <= budget:
+            return normalized
+
+        # 估算每条约消息的 token，用于定位可截断的大消息
+        per_msg = [count_tokens_approximately([m]) for m in normalized]
+        excess = total - budget
+        # 从大到小截断，正文保留头尾各一半
+        order = sorted(range(len(normalized)), key=lambda i: per_msg[i], reverse=True)
+        for i in order:
+            if excess <= 0:
+                break
+            content = normalized[i].content
+            if not isinstance(content, str):
+                continue
+            # 保底留 ~50 tokens（头尾各约 100 字符），其余都可截掉
+            max_cut = max(per_msg[i] - 50, 0)
+            # 过切 20% + 16 tokens，覆盖截断标记与估算误差，避免多轮不收敛
+            cut = min(int(excess * 1.2) + 16, max_cut)
+            if cut <= 0:
+                continue
+            keep_chars = max(len(content) - cut * 4, 200)
+            half = keep_chars // 2
+            normalized[i] = normalized[i].model_copy(update={
+                "content": content[:half] + "\n...[内容过长已截断]...\n" + content[-half:],
+            })
+            excess -= cut
+
+    final = count_tokens_approximately(normalized)
+    if final > budget:
+        raise RuntimeError(
+            f"prompt 估算 {final} tokens 超过上下文上限 {budget}，"
+            "截断后仍无法容纳，请减小输入分片或调高 MAX_CONTEXT_TOKENS"
+        )
+    return normalized
+
+
+async def invoke_guarded(model, messages: list, config: Optional[RunnableConfig] = None):
+    """ainvoke with context-budget enforcement (128k by default)."""
+    return await model.ainvoke(enforce_context_budget(messages), config=config)
+
+
 # === 通用辅助 ===
 
 def parse_json_loose(text: Any) -> dict:
@@ -107,7 +173,7 @@ async def run_extraction(
     """Run the summary extractor as a plain LLM call and persist the summary."""
     model = llm or get_llm()
     prompt = build_extraction_prompt(artifact, artifact_type)
-    resp = await model.ainvoke([("user", prompt)], config=config)
+    resp = await invoke_guarded(model, [("user", prompt)], config=config)
     data = parse_json_loose(getattr(resp, "content", resp))
     if data.get("parse_error"):
         bb_log_event(
@@ -138,6 +204,14 @@ def make_worker_node(spec: WorkerSpec, llm=None):
                 tools=list(spec.tools),
                 system_prompt=spec.instruction,
                 response_format=spec.output_schema,
+                # ReAct 历史接近上下文上限（128k 的 75%）时自动摘要压缩
+                middleware=[
+                    SummarizationMiddleware(
+                        _cache["model"],
+                        trigger=("tokens", _summary_trigger_tokens()),
+                        keep=("messages", 20),
+                    )
+                ],
             )
         return _cache["agent"]
 
@@ -425,7 +499,7 @@ def make_phase3_node(llm=None):
                 guides=guides_text,
                 project_name=project,
             )
-            resp = await model.ainvoke([("user", prompt)], config=config)
+            resp = await invoke_guarded(model, [("user", prompt)], config=config)
             artifact = parse_json_loose(getattr(resp, "content", resp))
             bb_write_artifact(f"phase3_func_{addr}", artifact, project)
 
@@ -489,7 +563,8 @@ def make_shard_synthesis_node(llm=None):
                 "phase3_shard": shard,
                 "shard_id": idx + 1,
             }
-            resp = await model.ainvoke(
+            resp = await invoke_guarded(
+                model,
                 [
                     ("system", SHARD_SYNTHESIS_PROMPT),
                     ("user", json.dumps(shard_context, ensure_ascii=False)),
@@ -526,7 +601,8 @@ def make_aggregator_node(llm=None):
                 "behavior": _summary_data(s["p1_behavior"]),
             },
         }
-        resp = await model.ainvoke(
+        resp = await invoke_guarded(
+            model,
             [
                 ("system", AGGREGATOR_PROMPT),
                 ("user", json.dumps(aggregate_context, ensure_ascii=False)),
