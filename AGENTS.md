@@ -32,17 +32,28 @@
   - `python-dotenv>=1.0`
 - **二进制解析库**：`pefile`、`capstone` **不是**项目依赖。如果需要生成 `pe_info.json`，请单独安装并在分析流程外运行。
 
-### 2.2 模型配置
+### 2.2 全局配置（config.yaml）
 
-运行时通过 `.env` 读取（文件被 gitignore，不要在仓库中提交）。代码实际读取以下环境变量（`.env` 中可配置任意 OpenAI 兼容端点）：
+运行时配置集中在根目录 **`config.yaml`**（已提交，勿写入机密），由 `config.py` 统一读写。优先级：**CLI 参数 > config.yaml > 环境变量 > 代码默认值**。
 
-- `API_KEY`（必填）
-- `BASE_URL`（默认 `https://api.deepseek.com/v1`）
-- `MODEL`（默认 `deepseek-flash`）
-- `THINKING`（默认 `disabled`；思考模式与 Worker 结构化输出的强制 `tool_choice` 不兼容，只有端点支持时才改为 `enabled`）
-- `MAX_CONTEXT_TOKENS`（默认 `128000`；所有 agent 单次调用的输入 token 上限）
+```yaml
+llm:
+  model: deepseek-flash                  # env 回退: MODEL
+  base_url: https://api.deepseek.com/v1  # env 回退: BASE_URL
+  thinking: disabled                     # 思考模式与 Worker 结构化输出的强制 tool_choice 不兼容
+  max_context_tokens: 128000             # 所有 agent 单次调用输入上限
+paths:
+  input_root: data/input                 # *_export_for_ai 自动发现
+  output_root: data/output               # 黑板输出根目录
+analysis:
+  project_name: module                   # CLI -p 覆盖
+  input_name: null                       # CLI -i 覆盖
+  resume: false                          # CLI -r 覆盖
+```
 
-`graph_nodes.get_llm()` 使用 `init_chat_model(MODEL, model_provider="openai", api_key=API_KEY, base_url=BASE_URL, extra_body={"thinking": {"type": THINKING}})` 构造模型，**不再需要 `GOOGLE_API_KEY`**。测试用 `graph_nodes.set_llm(fake)` 或 `build_graph(llm=fake)` 注入假模型。
+读取入口：`config.cfg("llm.model", env="MODEL", default=...)`（另有 `cfg_int` / `cfg_bool`）；写回入口：`config.write_config({...})`（深合并，值为 `None` 表示删键）。`config.yaml` 相对当前工作目录解析并按 mtime 缓存，测试 chdir 到临时目录后自动回退到环境变量/默认值。
+
+**`API_KEY` 仍放 `.env`**（已 gitignore，也可在 `llm.api_key` 配置但不推荐）。`graph_nodes.get_llm()` 用上述配置构造 `init_chat_model(..., extra_body={"thinking": ...})`，**不再需要 `GOOGLE_API_KEY`**。测试用 `graph_nodes.set_llm(fake)` 或 `build_graph(llm=fake)` 注入假模型。
 
 ### 2.3 pytest 配置
 
@@ -65,6 +76,8 @@ multi-agent-adk/
 ├── graph_nodes.py                    # 节点工厂与业务节点（worker/预提取/知识路由/审批门/phase3/phase4）
 ├── state.py                          # AnalysisState(TypedDict) + Pydantic 输出模型
 ├── observability.py                  # TokenStatsCallback：按 langgraph_node 聚合 token 用量
+├── config.py                         # 全局配置读写入口（cfg/cfg_int/cfg_bool/write_config）
+├── config.yaml                       # 全局配置（llm/paths/analysis，已提交，勿写机密）
 ├── pyproject.toml                    # 项目元数据 + pytest 配置
 ├── uv.lock                           # uv 锁定文件
 ├── .env                              # API Key（敏感，已 gitignore）
@@ -142,9 +155,9 @@ pip install -e .
 
 ```env
 API_KEY=your_key_here
-BASE_URL=https://api.deepseek.com/v1
-MODEL=deepseek-flash
 ```
+
+其余运行时配置（模型、端点、路径、分析默认值）都在根目录 `config.yaml`，见 2.2 节。
 
 ### 4.2 运行方式
 
@@ -159,7 +172,7 @@ python main.py \
     # -r                       # --resume：可选，断点续跑
 ```
 
-输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用。`--project-name` / `--input-name` 也可用环境变量 `PROJECT_NAME` / `INPUT_NAME` 提供。不再需要 `--export-dir` / `--work-dir` / `--sample-type`：样本类型永远 auto，由 `pre_extract` 节点调 `detect_sample_type` 判定。
+三个参数的默认值均取自 `config.yaml` 的 `analysis.*`（CLI 传参优先，环境变量 `PROJECT_NAME` / `INPUT_NAME` / `RESUME` 兜底）；`config.yaml` 配好 `analysis.project_name` 后可直接 `python main.py` 无参运行。输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用。不再需要 `--export-dir` / `--work-dir` / `--sample-type`：样本类型永远 auto，由 `pre_extract` 节点调 `detect_sample_type` 判定。
 
 **程序化调用（带黑板与断点）**
 
@@ -198,7 +211,7 @@ pytest -v
 - **类型提示**：使用 `typing`（`Dict`, `List`, `Any`, `Optional`）或 3.10+ 的 `|` 联合类型（当前代码两种都有）。
 - **错误处理**：Tool 函数统一返回 `{"status": "success|error", "error": None|str, ...}`，禁止直接抛出异常给上层；纯函数节点（如 `pre_extract_node`）允许抛出 `RuntimeError` 中止整轮分析。
 - **JSON 输出**：写入文件时统一使用 `ensure_ascii=False, indent=2`。
-- **路径**：使用 `pathlib.Path` 或 `os.path.join`，跨平台兼容；黑板路径全部基于当前工作目录下的 `data/output/`（由 `tools.blackboard_tools.board_base_dir()` 决定，可用 `BOARD_BASE_DIR` 环境变量覆盖）。
+- **路径**：使用 `pathlib.Path` 或 `os.path.join`，跨平台兼容；黑板路径全部基于当前工作目录下的 `data/output/`（由 `tools.blackboard_tools.board_base_dir()` 决定，读 `config.yaml` 的 `paths.output_root`，环境变量 `BOARD_BASE_DIR` 兜底）。
 - **命名**：
   - Worker 模块：`{purpose}_{role}.py`，WorkerSpec `name` 与模块名一致。
   - `output_key` 规范：`string_analysis`、`api_behavior_analysis`、`export_interface_analysis`、`behavior_profile`、`function_boundary_analysis`、`scheduler_decision`；Phase 4 结果不落 state 原文，只写 `final_report_ref`（`bb://summary/p4_final_report`）。
@@ -256,6 +269,7 @@ pytest -v
 
 | 需求 | 推荐修改位置 |
 |------|-------------|
+| 调整全局配置（模型/路径/分析默认值） | 直接编辑根目录 `config.yaml`；新增配置项在 `config.py` 用 `cfg()` 读取 |
 | 新增一个 Phase 0/1 Worker | `workers/phaseX/` 新增提示词模块，在 `workers/specs.py` 声明 WorkerSpec，在 `graph.py` 加节点与边 |
 | 调整 Worker 提示词 | 直接修改对应 `workers/phaseX/xxx.py` 中的 `INSTRUCTION` 常量（无需动 specs.py） |
 | 新增文件加载 Tool | `tools/file_loaders.py` 实现，加入对应 `workers/specs.py` 中 WorkerSpec 的 `tools` 元组 |

@@ -252,7 +252,7 @@ print(str(token_report))                # 人类可读报告
 
 ### 5.3 上下文预算（128k）
 
-所有 agent 的单次 LLM 调用输入上限为 **128k tokens**（`MAX_CONTEXT_TOKENS` 环境变量可覆盖）：
+所有 agent 的单次 LLM 调用输入上限为 **128k tokens**（`config.yaml` 的 `llm.max_context_tokens`，环境变量 `MAX_CONTEXT_TOKENS` 兜底）：
 
 - **Worker（ReAct 循环）**：`create_agent` 挂 `SummarizationMiddleware`，历史消息估算超过 128k 的 75% 时自动摘要压缩，保留最近 20 条消息。
 - **直接 LLM 调用**（extractor / Phase 3 / Phase 4）：统一走 `graph_nodes.invoke_guarded`，调用前 `enforce_context_budget` 估算 token，超限时从最长消息开始头尾保留式截断，截断后仍超限则抛 `RuntimeError`。
@@ -270,8 +270,10 @@ multi-agent-adk/
 ├── state.py                          # AnalysisState(TypedDict) + Pydantic 输出模型
 │                                     #   (StringAnalysis / FunctionBoundaryAnalysis / ArchDetection / FuncCandidate)
 ├── observability.py                  # TokenStatsCallback：按 langgraph_node 聚合 token 用量
+├── config.py                         # 全局配置读写入口（config.yaml 加载，CLI > yaml > env > 默认值）
+├── config.yaml                       # 全局配置：llm / paths / analysis
 ├── pyproject.toml                    # 项目依赖 + pytest 配置
-├── .env                              # API_KEY / BASE_URL / MODEL（已 gitignore）
+├── .env                              # API_KEY（已 gitignore；其余配置在 config.yaml）
 ├── ARCHITECTURE.md                   # 本文件 — 架构指南
 ├── tools/                            # FunctionTool 实现
 │   ├── file_loaders.py               # IDA 导出文件加载工具（含 Phase -1 预提取）
@@ -352,6 +354,7 @@ dependencies = [
     "langchain-openai>=1.0",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
+    "pyyaml>=6.0",
 ]
 ```
 
@@ -364,19 +367,14 @@ dependencies = [
 ### 9.1 CLI
 
 ```bash
-# 设置模型访问环境变量（或写入 .env）
-export API_KEY="your-key"
-export BASE_URL="https://api.deepseek.com/v1"
-export MODEL="deepseek-flash"
-
-# 输入放 data/input/ 下的 *_export_for_ai 目录，自动发现
+# API_KEY 写入 .env；模型/路径/分析默认值在根目录 config.yaml
 python main.py \
     -p malware_sample_001      # --project-name：data/output/ 子目录名
     # -i module.upx            # --input-name：可选，指定 data/input/ 下的导出目录（可省略 _export_for_ai 后缀）
     # -r                       # --resume：可选，断点续跑（跳过 Phase -1）
 ```
 
-输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用；多个候选且无法确定时报错并列出候选。`--project-name` 也可通过环境变量 `PROJECT_NAME` 提供，`--input-name` 对应 `INPUT_NAME`。样本类型永远 auto，由 `pre_extract` 节点调用 `detect_sample_type` 判定。
+配置优先级：**CLI 参数 > `config.yaml` > 环境变量 > 默认值**。输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用；多个候选且无法确定时报错并列出候选。`config.yaml` 配好 `analysis.project_name` 后可无参运行。样本类型永远 auto，由 `pre_extract` 节点调用 `detect_sample_type` 判定。
 
 ### 9.2 程序化调用
 
@@ -394,5 +392,6 @@ final_state, token_report = asyncio.run(run_analysis_with_blackboard(
 ### 9.3 环境要求
 
 - Python 3.10+
-- 模型访问环境变量（`API_KEY` / `BASE_URL` / `MODEL`，代码实际读取）
+- 根目录 `config.yaml`（模型/路径/分析默认值，随仓库提交）
+- `.env` 中的 `API_KEY`（唯一必需的机密配置；`BASE_URL` / `MODEL` 等已迁移至 `config.yaml`，环境变量仅作兜底）
 - IDA 无 MCP 导出目录（strings.txt, exports.txt, imports.txt, function_index.txt）
