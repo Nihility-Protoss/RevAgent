@@ -28,6 +28,7 @@ from graph_nodes import (
     resolve_active_guides,
 )
 from observability import TokenStatsCallback
+from tools.blackboard_tools import board_base_dir
 from tools.token_stats import AnalysisTokenReport, StageTokenStats
 
 
@@ -416,15 +417,15 @@ def test_build_review_message_includes_behavior_type():
 def test_resolve_active_guides_rust(tmp_path, monkeypatch):
     """arch_detection=rust/high activates rust guide; meta file written."""
     monkeypatch.chdir(tmp_path)
-    os.makedirs(".blackboard/proj/summary")
-    with open(".blackboard/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
+    os.makedirs(board_base_dir() + "/proj/summary")
+    with open(board_base_dir() + "/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
         json.dump(
             {"arch_detection": {"language": "rust", "confidence": "high"}},
             f,
         )
     result = resolve_active_guides("proj")
     assert result["status"] == "success"
-    with open(".blackboard/proj/meta/active_guides.json", encoding="utf-8") as f:
+    with open(board_base_dir() + "/proj/meta/active_guides.json", encoding="utf-8") as f:
         meta = json.load(f)
     names = [g["name"] for g in meta["guides"]]
     assert names[0] == "windows_pe"
@@ -433,8 +434,8 @@ def test_resolve_active_guides_rust(tmp_path, monkeypatch):
 
 def test_resolve_active_guides_low_confidence_defaults(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    os.makedirs(".blackboard/proj/summary")
-    with open(".blackboard/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
+    os.makedirs(board_base_dir() + "/proj/summary")
+    with open(board_base_dir() + "/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
         json.dump(
             {"arch_detection": {"language": "unknown", "confidence": "low"}},
             f,
@@ -449,7 +450,7 @@ def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
     result = resolve_active_guides("proj")
     assert result["status"] == "success"
     assert [g["name"] for g in result["guides"]] == ["windows_pe"]
-    assert os.path.exists(".blackboard/proj/meta/execution_log.jsonl")
+    assert os.path.exists(board_base_dir() + "/proj/meta/execution_log.jsonl")
 
 
 def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
@@ -462,14 +463,14 @@ def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
     assert names[0] == "windows_pe"
     assert "rust" in names
     # not relying on blackboard: no summary file exists
-    assert not os.path.exists(".blackboard/proj/summary/strings_summary.json")
+    assert not os.path.exists(board_base_dir() + "/proj/summary/strings_summary.json")
 
 
 def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch):
     """Corrupt meta/active_guides.json must fall back to the windows_pe baseline."""
     monkeypatch.chdir(tmp_path)
-    os.makedirs(".blackboard/proj/meta")
-    with open(".blackboard/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
+    os.makedirs(board_base_dir() + "/proj/meta")
+    with open(board_base_dir() + "/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
         f.write("{invalid")
     text = _load_active_guides_text("proj")
     assert "PE" in text
@@ -478,9 +479,9 @@ def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch)
 # === Phase -1 pre-extraction =============================================
 
 def test_blackboard_directory_structure():
-    """Running pre-extract should create .blackboard/ structure."""
+    """Running pre-extract should create data/output structure."""
     from tools.file_loaders import pre_extract_sample
-    fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "module.upx_export_for_ai")
+    fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "input", "module.upx_export_for_ai")
     if not os.path.exists(fixture_dir):
         pytest.skip("Fixture data not found")
 
@@ -490,8 +491,8 @@ def test_blackboard_directory_structure():
         try:
             result = pre_extract_sample(fixture_dir, "test_project")
             assert result["status"] == "success"
-            assert os.path.exists(os.path.join(".blackboard", "test_project", "extracts"))
-            assert os.path.exists(os.path.join(".blackboard", "test_project", "extracts", "strings_extract.json"))
+            assert os.path.exists(os.path.join(board_base_dir(), "test_project", "extracts"))
+            assert os.path.exists(os.path.join(board_base_dir(), "test_project", "extracts", "strings_extract.json"))
         finally:
             os.chdir(orig_cwd)
 
@@ -547,6 +548,7 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
         assert _CALL_COUNTS.get(branch, 0) >= 1, f"fake model branch never fired: {branch}"
 
     # Terminal state carries the key outputs of every phase.
+    assert final_state["sample_type"] == "pe"  # pre_extract 节点自动检测（imports+exports 齐全）
     assert final_state["scheduler_decision"]["action"] == "AWAITING_HUMAN_REVIEW"
     assert final_state["phase2_human_decision"] == "CONFIRM"
     assert final_state["final_report_ref"] == "bb://summary/p4_final_report"
@@ -555,13 +557,13 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
     assert final_state["func_analysis_refs"][0]["addr"] == "0x401000"
 
     # Phase 0 arch_detection routed the rust knowledge guide in.
-    with open(".blackboard/test_proj/meta/active_guides.json", encoding="utf-8") as f:
+    with open(board_base_dir() + "/test_proj/meta/active_guides.json", encoding="utf-8") as f:
         guide_names = [g["name"] for g in json.load(f)["guides"]]
     assert guide_names[0] == "windows_pe"
     assert "rust" in guide_names
 
     # Blackboard persistence: artifacts, per-phase summaries, final report.
-    board = os.path.join(".blackboard", "test_proj")
+    board = os.path.join(board_base_dir(), "test_proj")
     assert os.path.exists(os.path.join(board, "extracts", "strings_extract.json"))
     assert os.path.exists(os.path.join(board, "artifacts", "phase3_func_0x401000.json"))
     for summary_name in [
@@ -597,3 +599,4 @@ def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
     assert final_state["func_analysis_refs"][0]["addr"] == "0x401000"
     assert "summary" in final_state["func_analysis_refs"][0]
     assert final_state["final_report_ref"] == "bb://summary/p4_final_report"
+

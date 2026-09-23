@@ -1,18 +1,103 @@
 import os
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+from tools.blackboard_tools import board_base_dir
+
+# 输入根目录：data/input 下按 *_export_for_ai 命名存放 IDA 导出产物
+DEFAULT_INPUT_ROOT = os.path.join("data", "input")
+EXPORT_DIR_SUFFIX = "_export_for_ai"
+
+
+def find_export_dirs(input_root: str = DEFAULT_INPUT_ROOT) -> list:
+    """列出 input_root 下所有 *_export_for_ai 目录名（排序后）。"""
+    if not os.path.isdir(input_root):
+        return []
+    return sorted(
+        name
+        for name in os.listdir(input_root)
+        if name.endswith(EXPORT_DIR_SUFFIX)
+        and os.path.isdir(os.path.join(input_root, name))
+    )
+
+
+def resolve_export_dir(
+    project_name: Optional[str] = None,
+    input_name: Optional[str] = None,
+    input_root: str = DEFAULT_INPUT_ROOT,
+) -> dict:
+    """按规则自动定位 data/input 下的 *_export_for_ai 导出目录。
+
+    优先级：显式 input_name（可省略 _export_for_ai 后缀）
+           > project_name 前缀匹配 > 唯一候选自动选用。
+
+    Returns:
+        Dict with status, export_dir, candidates.
+    """
+    candidates = find_export_dirs(input_root)
+    if not candidates:
+        return {
+            "status": "error",
+            "error": f"未在 {input_root} 下找到任何 *{EXPORT_DIR_SUFFIX} 目录",
+            "export_dir": None,
+            "candidates": [],
+        }
+
+    if input_name:
+        name = input_name
+        if not name.endswith(EXPORT_DIR_SUFFIX):
+            name = name + EXPORT_DIR_SUFFIX
+        matches = [c for c in candidates if c == name or c == input_name]
+        if matches:
+            return {
+                "status": "success",
+                "error": None,
+                "export_dir": os.path.join(input_root, matches[0]),
+                "candidates": candidates,
+            }
+        return {
+            "status": "error",
+            "error": f"input_name={input_name!r} 未匹配任何导出目录",
+            "export_dir": None,
+            "candidates": candidates,
+        }
+
+    if project_name:
+        prefixed = [c for c in candidates if c.startswith(project_name)]
+        if len(prefixed) == 1:
+            return {
+                "status": "success",
+                "error": None,
+                "export_dir": os.path.join(input_root, prefixed[0]),
+                "candidates": candidates,
+            }
+
+    if len(candidates) == 1:
+        return {
+            "status": "success",
+            "error": None,
+            "export_dir": os.path.join(input_root, candidates[0]),
+            "candidates": candidates,
+        }
+
+    return {
+        "status": "error",
+        "error": "存在多个导出目录，无法自动选择，请用 -i/--input-name 指定",
+        "export_dir": None,
+        "candidates": candidates,
+    }
 
 
 def pre_extract_sample(export_dir: str, project_name: str, output_base: str = ".") -> dict:
     """Phase -1: Pre-extract all raw IDA export files into structured JSON.
 
     No content filtering — only minimal cleaning (strip empty lines, fix encoding).
-    Outputs go to {output_base}/.blackboard/{project_name}/extracts/.
+    Outputs go to {output_base}/{board_base}/{project_name}/extracts/.
     """
     result = {"status": "success", "error": None, "extracts_dir": None}
 
     try:
-        board_dir = os.path.join(output_base, ".blackboard", project_name)
+        board_dir = os.path.join(output_base, board_base_dir(), project_name)
         extracts_dir = os.path.join(board_dir, "extracts")
         os.makedirs(extracts_dir, exist_ok=True)
         result["extracts_dir"] = extracts_dir

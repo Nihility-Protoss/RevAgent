@@ -24,9 +24,10 @@ from tools.blackboard_tools import (
     bb_read_summary,
     bb_write_artifact,
     bb_write_summary,
+    board_path,
     load_function_data,
 )
-from tools.file_loaders import pre_extract_sample
+from tools.file_loaders import detect_sample_type, pre_extract_sample
 from workers.extractor import build_extraction_prompt
 from workers.knowledge import KNOWLEDGE_REGISTRY, load_knowledge, match_guides
 from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
@@ -186,8 +187,22 @@ def pre_extract_node(state: AnalysisState) -> dict:
     result = pre_extract_sample(state["sample_export_dir"], project)
     if result["status"] != "success":
         raise RuntimeError(f"Pre-extraction failed: {result.get('error')}")
+
+    # 样本类型永远 auto：由预提取节点根据导出产物判定并写入图状态
+    type_result = detect_sample_type(state["sample_export_dir"])
+    sample_type = type_result.get("sample_type", "unknown")
+    bb_log_event(
+        "sample_type_detected",
+        {
+            "sample_type": sample_type,
+            "confidence": type_result.get("confidence"),
+            "indicators": type_result.get("indicators", []),
+        },
+        project,
+    )
+
     bb_checkpoint("pre_extract_complete", project)
-    return {}
+    return {"sample_type": sample_type}
 
 
 # === 知识路由（纯函数节点，逻辑照搬原 orchestrator.resolve_active_guides）===
@@ -235,7 +250,7 @@ def resolve_active_guides(project_name: str, arch_detection: Optional[dict] = No
         "resolved_at": _now_iso(),
     }
     try:
-        meta_dir = os.path.join(".blackboard", project_name, "meta")
+        meta_dir = board_path(project_name, "meta")
         os.makedirs(meta_dir, exist_ok=True)
         with open(os.path.join(meta_dir, "active_guides.json"), "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, indent=2)
@@ -259,7 +274,7 @@ def _load_active_guides_text(project_name: str) -> str:
         result = load_knowledge("__active__", project_name)
         return result.get("content", "") if result.get("status") == "success" else ""
 
-    meta_path = os.path.join(".blackboard", project_name, "meta", "active_guides.json")
+    meta_path = board_path(project_name, "meta", "active_guides.json")
     if not os.path.exists(meta_path):
         return _fallback()
     try:

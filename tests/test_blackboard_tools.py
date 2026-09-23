@@ -7,11 +7,12 @@ from tools.blackboard_tools import (
     bb_read_extract, bb_read_summary, bb_write_summary,
     bb_write_artifact, bb_list_summaries, bb_has_artifact,
     bb_checkpoint, bb_load_checkpoint, bb_log_event,
+    board_base_dir,
 )
 
 
 def _make_board(project_name, base_dir):
-    board_dir = os.path.join(base_dir, ".blackboard", project_name)
+    board_dir = os.path.join(base_dir, board_base_dir(), project_name)
     for sub in ["extracts", "artifacts", "summary", "meta"]:
         os.makedirs(os.path.join(board_dir, sub), exist_ok=True)
     return board_dir
@@ -82,7 +83,7 @@ def test_bb_log_event():
         os.chdir(tmpdir)
         try:
             bb_log_event("worker_failed", {"worker": "test", "reason": "timeout"}, "test_proj")
-            log_path = os.path.join(tmpdir, ".blackboard", "test_proj", "meta", "execution_log.jsonl")
+            log_path = os.path.join(tmpdir, board_base_dir(), "test_proj", "meta", "execution_log.jsonl")
             assert os.path.exists(log_path)
             with open(log_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()

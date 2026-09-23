@@ -88,10 +88,11 @@ def test_load_active_falls_back_when_meta_missing():
 def test_load_active_reads_meta(tmp_path, monkeypatch):
     import json
     import os
+    from tools.blackboard_tools import board_base_dir
     from workers.knowledge import load_knowledge
     monkeypatch.chdir(tmp_path)
-    os.makedirs(".blackboard/proj/meta")
-    with open(".blackboard/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
+    os.makedirs(board_base_dir() + "/proj/meta")
+    with open(board_base_dir() + "/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
         json.dump(
             {"status": "success",
              "guides": [{"name": "windows_pe"}, {"name": "rust"}]},

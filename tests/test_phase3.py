@@ -7,7 +7,7 @@ from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
 
 
 def test_load_function_data_reads_decompile():
-    fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "module.upx_export_for_ai")
+    fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "input", "module.upx_export_for_ai")
     if not os.path.exists(fixture_dir):
         pytest.skip("Fixture data not found")
 

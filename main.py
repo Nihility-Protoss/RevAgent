@@ -6,6 +6,7 @@ via CLI args / env vars instead of a RequestInput text protocol.
 import argparse
 import asyncio
 import os
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -13,17 +14,19 @@ load_dotenv()
 
 
 async def run_analysis_with_blackboard(
-    sample_export_dir: str,
     sample_project_name: str,
-    sample_type: str = "auto",
+    input_name: Optional[str] = None,
+    sample_export_dir: Optional[str] = None,
     resume: bool = False,
 ):
     """Run the complete analysis workflow with blackboard context management.
 
     Args:
-        sample_export_dir: Path to IDA export directory.
-        sample_project_name: Sample project name (blackboard subdirectory).
-        sample_type: File type (pe/lnk/elf/auto).
+        sample_project_name: Sample project name (data/output/ subdirectory).
+        input_name: Optional export dir name under data/input/ (with or without
+            the _export_for_ai suffix). Resolved automatically when omitted.
+        sample_export_dir: Explicit IDA export directory; bypasses data/input/
+            auto-discovery when given.
         resume: If True, skip Phase -1 when a checkpoint already exists.
 
     Returns:
@@ -31,6 +34,17 @@ async def run_analysis_with_blackboard(
     """
     from graph import build_graph
     from observability import TokenStatsCallback
+    from tools.file_loaders import resolve_export_dir
+
+    if sample_export_dir is None:
+        resolved = resolve_export_dir(
+            project_name=sample_project_name, input_name=input_name
+        )
+        if resolved["status"] != "success":
+            raise RuntimeError(
+                f"{resolved['error']}（候选: {resolved['candidates']}）"
+            )
+        sample_export_dir = resolved["export_dir"]
 
     graph = build_graph()
     token_callback = TokenStatsCallback(sample_project_name)
@@ -38,7 +52,6 @@ async def run_analysis_with_blackboard(
     initial_state = {
         "sample_project_name": sample_project_name,
         "sample_export_dir": sample_export_dir,
-        "sample_type": sample_type,
         "resume": resume,
     }
 
@@ -52,32 +65,23 @@ async def run_analysis_with_blackboard(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RevAgent 恶意样本静态分析系统（LangGraph）")
-    parser.add_argument(
-        "-e",
-        "--export-dir",
-        default=os.getenv("EXPORT_DIR"),
-        required=os.getenv("EXPORT_DIR") is None,
-        help="IDA 导出目录（含 strings.txt/imports.txt/exports.txt/function_index.txt）",
+    parser = argparse.ArgumentParser(
+        description="RevAgent 恶意样本静态分析系统（LangGraph）。"
+        "自动分析 data/input/ 下的 *_export_for_ai 目录，结果写入 data/output/<project-name>/。"
     )
     parser.add_argument(
         "-p",
         "--project-name",
         default=os.getenv("PROJECT_NAME"),
         required=os.getenv("PROJECT_NAME") is None,
-        help="项目存档名（.blackboard/ 子目录名）",
+        help="项目存档名（data/output/ 子目录名）",
     )
     parser.add_argument(
-        "-w",
-        "--work-dir",
-        default=os.getenv("WORK_DIR", "."),
-        help="工作目录（.blackboard/ 存放位置，默认当前目录）",
-    )
-    parser.add_argument(
-        "-t",
-        "--sample-type",
-        default="auto",
-        help="样本类型 (pe/lnk/elf/auto)",
+        "-i",
+        "--input-name",
+        default=os.getenv("INPUT_NAME"),
+        help="data/input/ 下的导出目录名（可省略 _export_for_ai 后缀；"
+        "默认按 project-name 前缀或唯一候选自动匹配）",
     )
     parser.add_argument(
         "-r",
@@ -87,18 +91,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.export_dir):
-        raise SystemExit(f"EXPORT_DIR 不存在或不是目录: {args.export_dir}")
-
-    if args.work_dir != ".":
-        os.makedirs(args.work_dir, exist_ok=True)
-        os.chdir(args.work_dir)
-
     asyncio.run(
         run_analysis_with_blackboard(
-            sample_export_dir=args.export_dir,
             sample_project_name=args.project_name,
-            sample_type=args.sample_type,
+            input_name=args.input_name,
             resume=args.resume,
         )
     )

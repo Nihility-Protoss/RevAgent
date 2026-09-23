@@ -3,15 +3,24 @@ import json
 from typing import Dict, Any, Optional
 
 
-def _board_path(project_name: str, *subpaths: str) -> str:
-    """Build path under .blackboard/{project_name}/."""
-    return os.path.join(".blackboard", project_name, *subpaths)
+def board_base_dir() -> str:
+    """黑板根目录：默认 data/output（可用 BOARD_BASE_DIR 环境变量覆盖）。"""
+    return os.getenv("BOARD_BASE_DIR", os.path.join("data", "output"))
+
+
+def board_path(project_name: str, *subpaths: str) -> str:
+    """Build path under {board_base}/{project_name}/."""
+    return os.path.join(board_base_dir(), project_name, *subpaths)
+
+
+# 兼容旧引用（测试与历史代码）
+_board_path = board_path
 
 
 def _ensure_dirs(project_name: str) -> None:
     """Ensure all blackboard subdirectories exist."""
     for sub in ["extracts", "artifacts", "summary", "meta", "artifacts/latest"]:
-        os.makedirs(_board_path(project_name, *sub.split("/")), exist_ok=True)
+        os.makedirs(board_path(project_name, *sub.split("/")), exist_ok=True)
 
 
 def _estimate_tokens(data: dict) -> int:
@@ -23,7 +32,7 @@ def _estimate_tokens(data: dict) -> int:
 
 def bb_read_extract(extract_name: str, project_name: str, chunk_index: int = 0) -> dict:
     """Read a chunk from extracts/{extract_name}.json."""
-    path = _board_path(project_name, "extracts", f"{extract_name}.json")
+    path = board_path(project_name, "extracts", f"{extract_name}.json")
     if not os.path.exists(path):
         return {"status": "error", "reason": "extract_not_found", "path": path}
 
@@ -62,7 +71,7 @@ def bb_read_extract(extract_name: str, project_name: str, chunk_index: int = 0) 
 
 def bb_read_summary(summary_name: str, project_name: str) -> dict:
     """Read a summary JSON from summary/."""
-    path = _board_path(project_name, "summary", f"{summary_name}.json")
+    path = board_path(project_name, "summary", f"{summary_name}.json")
     if not os.path.exists(path):
         return {"status": "error", "reason": "summary_not_found", "path": path}
 
@@ -75,7 +84,7 @@ def bb_read_summary(summary_name: str, project_name: str) -> dict:
 
 def bb_list_summaries(prefix: str, project_name: str) -> list[dict]:
     """List all summaries matching prefix, returning their full contents."""
-    summary_dir = _board_path(project_name, "summary")
+    summary_dir = board_path(project_name, "summary")
     if not os.path.exists(summary_dir):
         return []
 
@@ -108,7 +117,7 @@ def bb_write_summary(summary_name: str, content: dict, project_name: str) -> dic
             "limit": 1500,
         }
 
-    path = _board_path(project_name, "summary", f"{summary_name}.json")
+    path = board_path(project_name, "summary", f"{summary_name}.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     try:
@@ -123,7 +132,7 @@ def bb_write_summary(summary_name: str, content: dict, project_name: str) -> dic
 
 def bb_read_artifact(artifact_name: str, project_name: str) -> dict:
     """Read a full artifact from artifacts/."""
-    path = _board_path(project_name, "artifacts", f"{artifact_name}.json")
+    path = board_path(project_name, "artifacts", f"{artifact_name}.json")
     if not os.path.exists(path):
         return {"status": "error", "reason": "artifact_not_found", "path": path}
 
@@ -138,12 +147,12 @@ def bb_write_artifact(artifact_name: str, content: dict, project_name: str) -> d
     """Write a full artifact and update latest/ index."""
     _ensure_dirs(project_name)
 
-    path = _board_path(project_name, "artifacts", f"{artifact_name}.json")
+    path = board_path(project_name, "artifacts", f"{artifact_name}.json")
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(content, f, ensure_ascii=False, indent=2)
 
-        latest_dir = _board_path(project_name, "artifacts", "latest")
+        latest_dir = board_path(project_name, "artifacts", "latest")
         os.makedirs(latest_dir, exist_ok=True)
         base_name = artifact_name
         for suffix in ["_timestamp", "_2026"]:
@@ -161,7 +170,7 @@ def bb_write_artifact(artifact_name: str, content: dict, project_name: str) -> d
 
 def bb_has_artifact(artifact_name: str, project_name: str) -> bool:
     """Check if an artifact exists."""
-    path = _board_path(project_name, "artifacts", f"{artifact_name}.json")
+    path = board_path(project_name, "artifacts", f"{artifact_name}.json")
     return os.path.exists(path)
 
 
@@ -171,7 +180,7 @@ def bb_checkpoint(phase: str, project_name: str) -> dict:
     """Save a checkpoint: update state.json and append to checkpoints.json."""
     _ensure_dirs(project_name)
 
-    meta_dir = _board_path(project_name, "meta")
+    meta_dir = board_path(project_name, "meta")
     state_path = os.path.join(meta_dir, "state.json")
     cp_path = os.path.join(meta_dir, "checkpoints.json")
 
@@ -203,7 +212,7 @@ def bb_checkpoint(phase: str, project_name: str) -> dict:
 
 def bb_load_checkpoint(project_name: str) -> Optional[dict]:
     """Load the latest checkpoint state. Returns None if no checkpoint exists."""
-    state_path = _board_path(project_name, "meta", "state.json")
+    state_path = board_path(project_name, "meta", "state.json")
     if not os.path.exists(state_path):
         return None
 
@@ -220,7 +229,7 @@ def bb_log_event(event_type: str, details: dict, project_name: str) -> dict:
     """Append a log event to execution_log.jsonl."""
     _ensure_dirs(project_name)
 
-    log_path = _board_path(project_name, "meta", "execution_log.jsonl")
+    log_path = board_path(project_name, "meta", "execution_log.jsonl")
     entry = {
         "timestamp": _now_iso(),
         "event_type": event_type,

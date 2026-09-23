@@ -12,9 +12,6 @@ venv/
 .pytest_cache/
 .coverage
 
-# Blackboard runtime data
-.blackboard/
-
 # IDE
 .idea/
 .vscode/

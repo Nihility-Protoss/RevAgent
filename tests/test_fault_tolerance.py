@@ -3,7 +3,7 @@ import tempfile
 import os
 import sys
 
-from tools.blackboard_tools import bb_write_summary
+from tools.blackboard_tools import bb_write_summary, board_path
 
 
 def test_summary_too_large_rejected():
@@ -13,7 +13,7 @@ def test_summary_too_large_rejected():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=ignore_cleanup) as tmpdir:
         os.chdir(tmpdir)
         try:
-            os.makedirs(".blackboard/test/summary", exist_ok=True)
+            os.makedirs(board_path("test", "summary"), exist_ok=True)
 
             large = {"items": ["x" * 200 for _ in range(200)]}  # ~40k chars = ~10k tokens
             result = bb_write_summary("too_big", large, "test")

@@ -146,3 +146,78 @@ def test_calculate_entropy_high():
     result = calculate_entropy(data)
     assert result["status"] == "success"
     assert result["entropy"] > 7.0
+
+
+# === Tests for data/input auto-discovery ===
+
+def _make_input_root(tmpdir, names):
+    input_root = os.path.join(tmpdir, "data", "input")
+    for name in names:
+        os.makedirs(os.path.join(input_root, name), exist_ok=True)
+    return input_root
+
+
+def test_find_export_dirs_filters_suffix():
+    from tools.file_loaders import find_export_dirs
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_root = _make_input_root(tmpdir, [
+            "b_export_for_ai", "a_export_for_ai", "not_an_export",
+        ])
+        # 文件（非目录）不应被列出
+        with open(os.path.join(input_root, "file_export_for_ai"), "w") as f:
+            f.write("x")
+        assert find_export_dirs(input_root) == ["a_export_for_ai", "b_export_for_ai"]
+        assert find_export_dirs(os.path.join(tmpdir, "missing")) == []
+
+
+def test_resolve_export_dir_unique_candidate():
+    from tools.file_loaders import resolve_export_dir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_root = _make_input_root(tmpdir, ["sample_export_for_ai"])
+        result = resolve_export_dir(project_name="anything", input_root=input_root)
+        assert result["status"] == "success"
+        assert result["export_dir"].endswith("sample_export_for_ai")
+
+
+def test_resolve_export_dir_project_prefix_match():
+    from tools.file_loaders import resolve_export_dir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_root = _make_input_root(tmpdir, [
+            "module.upx_export_for_ai", "other_export_for_ai",
+        ])
+        result = resolve_export_dir(project_name="module", input_root=input_root)
+        assert result["status"] == "success"
+        assert result["export_dir"].endswith("module.upx_export_for_ai")
+
+
+def test_resolve_export_dir_explicit_input_name():
+    from tools.file_loaders import resolve_export_dir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_root = _make_input_root(tmpdir, [
+            "module.upx_export_for_ai", "other_export_for_ai",
+        ])
+        # 省略后缀也能匹配
+        result = resolve_export_dir(input_name="other", input_root=input_root)
+        assert result["status"] == "success"
+        assert result["export_dir"].endswith("other_export_for_ai")
+        # 未知名称报错并列出候选
+        bad = resolve_export_dir(input_name="nope", input_root=input_root)
+        assert bad["status"] == "error"
+        assert len(bad["candidates"]) == 2
+
+
+def test_resolve_export_dir_ambiguous_and_empty():
+    from tools.file_loaders import resolve_export_dir
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_root = _make_input_root(tmpdir, [
+            "a_export_for_ai", "b_export_for_ai",
+        ])
+        result = resolve_export_dir(project_name="zzz", input_root=input_root)
+        assert result["status"] == "error"
+        assert "input-name" in result["error"]
+
+        empty_root = os.path.join(tmpdir, "empty")
+        os.makedirs(empty_root)
+        none = resolve_export_dir(input_root=empty_root)
+        assert none["status"] == "error"
+        assert none["candidates"] == []
