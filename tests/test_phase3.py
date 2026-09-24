@@ -29,7 +29,8 @@ def test_func_analyzer_prompt_includes_constraints():
 
 
 def test_build_func_analysis_prompt_truncation():
-    """Prompt should truncate decompile/disassembly to 2500 chars and 120 lines."""
+    """Prompt 应将 decompile/disassembly 截断为 2500 字符、120 行。
+    """
     long_decompile = "A" * 5000
     long_disasm = "B" * 5000
     func_data = {
@@ -40,7 +41,7 @@ def test_build_func_analysis_prompt_truncation():
         "xrefs_out": ["0x402000"],
     }
     prompt = build_func_analysis_prompt("0x403000", "sub_403000", func_data)
-    assert prompt.count("A") <= 2503  # 2500 from snippet + 3 from "API" in template
+    assert prompt.count("A") <= 2503  # 2500 来自 snippet，另有 3 处来自模板中的 "API"
     assert prompt.count("B") <= 2500
     assert "120" in prompt
 

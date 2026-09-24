@@ -1,8 +1,7 @@
-"""LangGraph callback-based token usage observability.
+"""基于 LangGraph callback 的 token 用量可观测性。
 
-Replaces ADK event-traversal statistics: a BaseCallbackHandler aggregates
-per-node token usage from LLM calls, covering every phase (including
-Phase 3/4) automatically. Output format stays AnalysisTokenReport-compatible.
+取代 ADK 的事件遍历统计：由 BaseCallbackHandler 从 LLM 调用中按节点聚合 token 用量，
+自动覆盖每个 Phase（含 Phase 3/4）。输出格式保持与 AnalysisTokenReport 兼容。
 """
 from typing import Any, Optional
 from uuid import UUID
@@ -14,7 +13,8 @@ from tools.token_stats import AnalysisTokenReport
 
 
 class TokenStatsCallback(BaseCallbackHandler):
-    """Aggregate LLM token usage per graph node (via langgraph_node metadata)."""
+    """按 graph 节点聚合 LLM token 用量（依据 langgraph_node metadata）。
+    """
 
     def __init__(self, sample_project_name: str):
         super().__init__()
@@ -53,7 +53,8 @@ class TokenStatsCallback(BaseCallbackHandler):
 
     @staticmethod
     def _extract_usage(response: LLMResult) -> Optional[tuple[int, int, int]]:
-        """Extract (prompt, candidate, total) token counts from an LLMResult."""
+        """从 LLMResult 中提取 (prompt, candidate, total) 三个 token 计数。
+        """
         usage = None
         try:
             usage = response.generations[0][0].message.usage_metadata

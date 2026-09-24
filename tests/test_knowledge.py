@@ -1,4 +1,4 @@
-"""Tests for workers.knowledge package."""
+"""workers.knowledge 包的测试。"""
 
 
 def test_registry_contains_windows_pe():
@@ -104,7 +104,7 @@ def test_load_active_reads_meta(tmp_path, monkeypatch):
 
 
 def test_match_guides_generic_applies_to(monkeypatch):
-    """A guide routed purely by a generic applies_to tag is matched dynamically."""
+    """仅凭通用 applies_to 标签路由的指南会被动态匹配。"""
     from pathlib import Path
 
     from workers.knowledge import KNOWLEDGE_REGISTRY, KnowledgeMeta, match_guides

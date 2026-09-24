@@ -9,7 +9,8 @@ from tools.file_loaders import pre_extract_sample
 
 
 def test_pre_extract_creates_extracts():
-    """Pre-extraction should create all extract JSON files."""
+    """预提取应创建全部 extract JSON 文件。
+    """
     fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "input", "module.upx_export_for_ai")
     if not os.path.exists(fixture_dir):
         pytest.skip("Fixture data not found")
@@ -32,7 +33,8 @@ def test_pre_extract_creates_extracts():
 
 
 def test_pre_extract_strings_structure():
-    """strings_extract.json must contain expected categories."""
+    """strings_extract.json 必须包含预期的分类。
+    """
     fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "input", "module.upx_export_for_ai")
     if not os.path.exists(fixture_dir):
         pytest.skip("Fixture data not found")

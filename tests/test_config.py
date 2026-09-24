@@ -1,4 +1,5 @@
-"""Tests for config.py (config.yaml 全局配置读写）。"""
+"""config.py 测试（config.yaml 全局配置读写）。
+"""
 import os
 
 import pytest
@@ -9,7 +10,8 @@ from config import cfg, cfg_bool, cfg_int, load_config, write_config
 
 @pytest.fixture()
 def workdir(tmp_path, monkeypatch):
-    """chdir 到无 config.yaml 的临时目录，测试结束自动还原。"""
+    """chdir 到不含 config.yaml 的临时目录，测试结束自动还原。
+    """
     monkeypatch.chdir(tmp_path)
     return tmp_path
 

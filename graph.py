@@ -1,7 +1,7 @@
-"""StateGraph assembly: the single place defining the analysis workflow.
+"""StateGraph 组装：定义分析工作流的唯一位置（图拓扑如下）。
 
-START → pre_extract → {string_analyst, api_profiler, export_analyzer} (并行扇出)
-      → resolve_guides → {behavior_synth, function_boundary} (并行扇出)
+START → pre_extract → {string_analyst, api_profiler, export_analyzer}（并行扇出）
+      → resolve_guides → {behavior_synth, function_boundary}（并行扇出）
       → scheduler → approval_gate → phase3_deep_analysis
       → shard_synthesis → aggregator → END
 """
@@ -25,15 +25,15 @@ from workers.specs import (
 
 
 def build_graph(llm=None, checkpointer=None):
-    """Build and compile the analysis StateGraph.
+    """构建并编译分析用的 StateGraph。
 
     Args:
-        llm: Optional chat model override (tests inject fakes; None = env-based).
-        checkpointer: Optional LangGraph checkpointer (Step 2 接入持久化).
+        llm: 可选的 chat model 覆盖项（测试注入 fake 模型；None 表示按环境变量构造）。
+        checkpointer: 可选的 LangGraph checkpointer（Step 2 接入持久化）。
     """
     builder = StateGraph(AnalysisState)
 
-    # Phase -1
+    # Phase -1：预提取
     builder.add_node("pre_extract", pre_extract_node)
 
     # Phase 0：快速定性（3 Worker 并行）

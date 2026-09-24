@@ -94,7 +94,7 @@ SUMMARY_SCHEMAS = {
 
 
 def build_extraction_prompt(artifact: dict, artifact_type: str) -> str:
-    """Build extraction prompt for a given artifact type."""
+    """为指定 artifact 类型构建摘要提取 prompt。"""
     schema = SUMMARY_SCHEMAS.get(artifact_type, SUMMARY_SCHEMAS["strings"])
     return EXTRACTION_PROMPT_TEMPLATE.format(
         artifact_type=artifact_type,

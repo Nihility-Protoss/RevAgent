@@ -19,7 +19,7 @@ arch_detection.language = c_cpp 的样本，与 windows_pe 基线叠加。
 不要把时间花在逐行阅读 STL 实现上。
 
 ## 噪声分离：函数族分类
-不要逐函数定性。按函数族批量归类，每族抽 1-2 个代表验证即可：
+不要逐函数定性。按函数族批量归类，每族抽 3-5 个代表验证即可：
 - STL 容器族（`std::vector/map/string` 痕迹：大量 `??0?$` 风格命名或模板实例化）。
 - CRT/运行库族（`malloc/free/printf` 包装、`__security_check_cookie`）。
 - 字符串与工具族（`strlen` 包装、大小写转换、Base64/编码例程）。

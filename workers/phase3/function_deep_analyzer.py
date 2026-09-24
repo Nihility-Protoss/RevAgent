@@ -56,12 +56,10 @@ def build_func_analysis_prompt(
     guides: str = "",
     project_name: str = "",
 ) -> str:
-    """Build analysis prompt for a single function.
+    """为单个函数构建分析 prompt。
 
-    When guides is provided, the active knowledge methodology is appended so
-    the analyzer can follow architecture-specific analysis rules. When
-    project_name is provided, it is appended so the analyzer can pass it to the
-    load_arch_guide tool.
+    当提供 guides 时，会追加当前生效的知识方法论，使分析器能够遵循架构相关的分析规则；
+    当提供 project_name 时，也会追加进去，使分析器可以将其传给 load_arch_guide 工具。
     """
     decompile = func_data.get("decompile_snippet") or "(无反编译数据)"
     disasm = func_data.get("disassembly_snippet") or "(无反汇编数据)"
@@ -72,9 +70,9 @@ def build_func_analysis_prompt(
         func_addr=func_addr,
         func_name=func_name,
         size=func_data.get("size", 0),
-        max_lines=120,  # Reduced from 200
-        decompile_snippet=decompile[:2500] if len(decompile) > 2500 else decompile,  # Reduced from 4000
-        disassembly_snippet=disasm[:2500] if len(disasm) > 2500 else disasm,  # Reduced from 4000
+        max_lines=120,  # 从 200 下调
+        decompile_snippet=decompile[:2500] if len(decompile) > 2500 else decompile,  # 从 4000 下调
+        disassembly_snippet=disasm[:2500] if len(disasm) > 2500 else disasm,  # 从 4000 下调
         xrefs_in=xrefs_in or ["无"],
         xrefs_out=xrefs_out or ["无"],
     )

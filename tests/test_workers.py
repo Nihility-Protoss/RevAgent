@@ -1,8 +1,8 @@
-"""Tests for workers.specs: WorkerSpec pure-data definitions (post LangGraph migration).
+"""workers.specs 测试：WorkerSpec 纯数据定义（LangGraph 迁移后）。
 
-The ADK LlmAgent instances are gone; each worker is now a frozen WorkerSpec
-(name/instruction/tools/output_key/output_schema) compiled into a graph node by
-graph_nodes.make_worker_node.
+ADK LlmAgent 实例已移除；每个 worker 现在是一个 frozen WorkerSpec
+（name/instruction/tools/output_key/output_schema），由 graph_nodes.make_worker_node
+编译为 graph 节点。
 """
 import dataclasses
 
@@ -100,21 +100,24 @@ def test_spec_tuple_composition():
 
 
 def test_all_workers_have_data_sufficiency_in_instruction():
-    """All workers must reference data sufficiency check in their instruction."""
+    """所有 worker 的 instruction 都必须引用数据充足性检查。
+    """
     for w in ALL_WORKER_SPECS:
         assert "insufficient_data" in w.instruction, f"{w.name} missing insufficient_data check"
         assert "status" in w.instruction, f"{w.name} missing status field requirement"
 
 
 def test_phase3_prompt_has_insufficient_data_exit():
-    """Phase 3 prompt must have explicit insufficient_data exit condition."""
+    """Phase 3 prompt 必须有显式的 insufficient_data 退出条件。
+    """
     from workers.phase3.function_deep_analyzer import FUNC_ANALYSIS_PROMPT_TEMPLATE
     assert "insufficient_data" in FUNC_ANALYSIS_PROMPT_TEMPLATE
     assert "代码片段不足" in FUNC_ANALYSIS_PROMPT_TEMPLATE
 
 
 def test_string_analyst_has_arch_detection():
-    """Phase 0 string analyst must detect architecture/language/packer."""
+    """Phase 0 字符串分析 worker 必须检测架构/语言/加壳器。
+    """
     assert "arch_detection" in string_artifact_analyst.instruction
     assert "compiler_hints" in string_artifact_analyst.instruction
     assert "sample_form" in string_artifact_analyst.instruction

@@ -1,11 +1,11 @@
-"""Token usage statistics collection for analysis runs."""
+"""分析运行的 token 用量统计收集。"""
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
 
 @dataclass
 class StageTokenStats:
-    """Token usage stats for a single stage/node."""
+    """单个阶段/节点的 token 用量统计。"""
     stage_name: str
     prompt_tokens: int = 0
     candidate_tokens: int = 0
@@ -13,7 +13,7 @@ class StageTokenStats:
     call_count: int = 0
 
     def add_usage(self, prompt_tokens: int, candidate_tokens: int, total_tokens: int) -> None:
-        """Add token usage from a single LLM call."""
+        """累加一次 LLM 调用的 token 用量。"""
         self.prompt_tokens += prompt_tokens
         self.candidate_tokens += candidate_tokens
         self.total_tokens += total_tokens
@@ -22,7 +22,7 @@ class StageTokenStats:
 
 @dataclass
 class AnalysisTokenReport:
-    """Complete token usage report for an analysis session."""
+    """一次分析会话的完整 token 用量报告。"""
     sample_project_name: str
     stages: Dict[str, StageTokenStats] = field(default_factory=dict)
     total_prompt_tokens: int = 0
@@ -31,7 +31,7 @@ class AnalysisTokenReport:
     total_llm_calls: int = 0
 
     def add_usage(self, stage_name: str, prompt_tokens: int, candidate_tokens: int, total_tokens: int) -> None:
-        """Aggregate one LLM call's token usage under the given stage/node name."""
+        """把一次 LLM 调用的 token 用量归集到指定的阶段/节点名下。"""
         stage_name = stage_name or "unknown"
         if stage_name not in self.stages:
             self.stages[stage_name] = StageTokenStats(stage_name=stage_name)
@@ -42,7 +42,7 @@ class AnalysisTokenReport:
         self.total_llm_calls += 1
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize report to dict."""
+        """把报告序列化为 dict。"""
         return {
             "sample_project_name": self.sample_project_name,
             "total_prompt_tokens": self.total_prompt_tokens,
@@ -62,7 +62,7 @@ class AnalysisTokenReport:
         }
 
     def __str__(self) -> str:
-        """Human-readable summary."""
+        """供人阅读的汇总文本。"""
         lines = [
             f"=== Token Usage Report: {self.sample_project_name} ===",
             f"Total LLM Calls: {self.total_llm_calls}",

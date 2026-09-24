@@ -1,8 +1,8 @@
-"""Integration tests for the LangGraph orchestration layer (post ADK migration).
+"""LangGraph 编排层的集成测试（ADK 迁移之后）。
 
-Pure-logic cases were ported from the old ADK orchestrator tests to
-graph_nodes; orchestration is exercised end-to-end via build_graph(llm=fake)
-with a scripted fake chat model — no real API tokens are consumed.
+纯逻辑用例已从旧的 ADK orchestrator 测试迁移到 graph_nodes；
+编排通过 build_graph(llm=fake) 配合脚本化的假聊天模型端到端执行，
+不消耗任何真实 API token。
 """
 import asyncio
 import json
@@ -32,7 +32,7 @@ from tools.blackboard_tools import board_base_dir
 from tools.token_stats import AnalysisTokenReport, StageTokenStats
 
 
-# === Scripted fake chat model ============================================
+# === 脚本化假聊天模型 =======================================================================
 
 STRING_ANALYSIS_JSON = json.dumps({
     "status": "success",
@@ -106,8 +106,7 @@ FINAL_JSON = json.dumps({
     "uncertainties": ["假数据"], "recommendations": ["动态调试确认"],
 }, ensure_ascii=False)
 
-# Counts which script branch answered each model call; the smoke test
-# asserts every expected branch fired and nothing fell through.
+# 统计每个模型调用由哪个脚本分支应答；冒烟测试断言每个预期分支都被触发、没有落到兜底分支。
 _CALL_COUNTS = {}
 
 
@@ -129,10 +128,10 @@ def _extractor_reply(prompt_text: str) -> str:
 
 
 class ScriptedFakeChatModel(BaseChatModel):
-    """Fake chat model dispatching canned JSON by prompt content.
+    """按 prompt 内容分发预置 JSON 的假聊天模型。
 
-    create_agent requires ``bind_tools`` support and a model profile
-    advertising structured output (ProviderStrategy); both are faked here.
+    create_agent 需要 ``bind_tools`` 支持，以及声明了结构化输出
+    （ProviderStrategy）的 model profile；这里把两者都做了伪造。
     """
 
     profile: dict = {"structured_output": True}
@@ -204,7 +203,7 @@ class ScriptedFakeChatModel(BaseChatModel):
 
 
 def _make_export_dir(base: str) -> str:
-    """Minimal IDA export fixture: raw text files + one decompiled function."""
+    """最小化的 IDA 导出 fixture：原始文本文件 + 一个反编译函数。"""
     export_dir = os.path.join(base, "export")
     os.makedirs(os.path.join(export_dir, "decompile"), exist_ok=True)
     with open(os.path.join(export_dir, "strings.txt"), "w", encoding="utf-8") as f:
@@ -221,10 +220,10 @@ def _make_export_dir(base: str) -> str:
     return export_dir
 
 
-# === Token report (AnalysisTokenReport.add_usage) =======================
+# === Token 报告（AnalysisTokenReport.add_usage） ======================================
 
 def test_token_report_basic():
-    """Test AnalysisTokenReport collects usage correctly."""
+    """测试 AnalysisTokenReport 能正确收集用量。"""
     report = AnalysisTokenReport(sample_project_name="test")
     report.add_usage("test_node", 100, 50, 150)
 
@@ -254,7 +253,7 @@ def test_token_report_accumulates_multiple_stages():
 
 
 def test_token_report_str_output():
-    """Test AnalysisTokenReport string representation."""
+    """测试 AnalysisTokenReport 的字符串表示。"""
     report = AnalysisTokenReport(sample_project_name="test")
     report.add_usage("scheduler", 1000, 500, 1500)
     output = str(report)
@@ -266,7 +265,7 @@ def test_token_report_str_output():
 
 
 def test_stage_token_stats_add_usage():
-    """Test StageTokenStats accumulates usage."""
+    """测试 StageTokenStats 累加用量。"""
     stats = StageTokenStats(stage_name="test_stage")
     stats.add_usage(100, 50, 150)
     assert stats.prompt_tokens == 100
@@ -279,7 +278,7 @@ def test_stage_token_stats_add_usage():
     assert stats.call_count == 2
 
 
-# === TokenStatsCallback (LangGraph callback observability) ================
+# === TokenStatsCallback（LangGraph callback 可观测性） =====================================
 
 def _llm_result_with_usage(input_tokens=100, output_tokens=50, total_tokens=150) -> LLMResult:
     msg = AIMessage(content="x", usage_metadata={
@@ -320,7 +319,7 @@ def test_token_stats_callback_on_chat_model_start():
 
 
 def test_token_stats_callback_falls_back_to_llm_output_token_usage():
-    """Models without usage_metadata on the message (e.g. OpenAI llm_output)."""
+    """消息上没有 usage_metadata 的模型（例如 OpenAI 的 llm_output）。"""
     cb = TokenStatsCallback(sample_project_name="test")
     run_id = uuid4()
     cb.on_llm_start({}, ["prompt"], run_id=run_id, metadata={"langgraph_node": "scheduler"})
@@ -356,7 +355,7 @@ def test_token_stats_callback_defaults_stage_to_unknown():
     assert "unknown" in cb.report.stages
 
 
-# === HITL approval protocol ==============================================
+# === HITL 审批协议 =======================================================================
 
 def test_parse_approval_reply_confirm():
     decision, addrs = parse_approval_reply("CONFIRM")
@@ -377,7 +376,7 @@ def test_parse_approval_reply_invalid():
 
 
 def test_approval_gate_node_confirm_via_prompt_human(monkeypatch):
-    """approval_gate_node must read replies via graph_nodes.prompt_human."""
+    """approval_gate_node 必须通过 graph_nodes.prompt_human 读取回复。"""
     monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "CONFIRM")
     result = graph_nodes.approval_gate_node({"sample_project_name": "t"})
     assert result["phase2_human_decision"] == "CONFIRM"
@@ -398,7 +397,7 @@ def test_approval_gate_node_defaults_to_confirm_after_invalid_replies(monkeypatc
 
 
 def test_build_review_message_includes_behavior_type():
-    """Review message should include key fields from state."""
+    """审查消息应包含 state 中的关键字段。"""
     state = {
         "behavior_profile": {"behavior_profile": {"primary_type": "Stealer", "confidence": "high"}},
         "string_analysis": {"suspicious_patterns": [{"risk_level": "high"}, {"risk_level": "high"}]},
@@ -412,10 +411,10 @@ def test_build_review_message_includes_behavior_type():
     assert "MODIFY" in msg
 
 
-# === Knowledge routing (resolve_active_guides) ===========================
+# === 知识路由（resolve_active_guides） ===============================================
 
 def test_resolve_active_guides_rust(tmp_path, monkeypatch):
-    """arch_detection=rust/high activates rust guide; meta file written."""
+    """arch_detection=rust/high 会激活 rust 指南，并写入 meta 文件。"""
     monkeypatch.chdir(tmp_path)
     os.makedirs(board_base_dir() + "/proj/summary")
     with open(board_base_dir() + "/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
@@ -445,7 +444,7 @@ def test_resolve_active_guides_low_confidence_defaults(tmp_path, monkeypatch):
 
 
 def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
-    """Missing strings_summary must not break the pipeline; default + log."""
+    """缺失 strings_summary 不能中断流水线；使用默认值并记录日志。"""
     monkeypatch.chdir(tmp_path)
     result = resolve_active_guides("proj")
     assert result["status"] == "success"
@@ -454,7 +453,7 @@ def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
 
 
 def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
-    """arch_detection passed from state must activate rust without a summary file."""
+    """从 state 传入的 arch_detection 必须能在没有 summary 文件的情况下激活 rust。"""
     monkeypatch.chdir(tmp_path)
     result = resolve_active_guides(
         "proj", arch_detection={"language": "rust", "confidence": "high"}
@@ -462,12 +461,12 @@ def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
     names = [g["name"] for g in result["guides"]]
     assert names[0] == "windows_pe"
     assert "rust" in names
-    # not relying on blackboard: no summary file exists
+    # 不依赖 blackboard（黑板）：此时不存在 summary 文件
     assert not os.path.exists(board_base_dir() + "/proj/summary/strings_summary.json")
 
 
 def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch):
-    """Corrupt meta/active_guides.json must fall back to the windows_pe baseline."""
+    """损坏的 meta/active_guides.json 必须回退到 windows_pe 基线。"""
     monkeypatch.chdir(tmp_path)
     os.makedirs(board_base_dir() + "/proj/meta")
     with open(board_base_dir() + "/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
@@ -476,10 +475,10 @@ def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch)
     assert "PE" in text
 
 
-# === Phase -1 pre-extraction =============================================
+# === Phase -1 预提取 =======================================================================
 
 def test_blackboard_directory_structure():
-    """Running pre-extract should create data/output structure."""
+    """执行 pre-extract 应创建 data/output 目录结构。"""
     from tools.file_loaders import pre_extract_sample
     fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "input", "module.upx_export_for_ai")
     if not os.path.exists(fixture_dir):
@@ -497,7 +496,7 @@ def test_blackboard_directory_structure():
             os.chdir(orig_cwd)
 
 
-# === Graph assembly ======================================================
+# === 图组装 =======================================================================
 
 EXPECTED_NODE_NAMES = {
     "pre_extract",
@@ -511,19 +510,19 @@ EXPECTED_NODE_NAMES = {
 
 
 def test_graph_structure():
-    """build_graph must register every phase node (fake model, no LLM calls)."""
+    """build_graph 必须注册所有 phase 节点（使用假模型，不发起 LLM 调用）。"""
     graph = build_graph(llm=ScriptedFakeChatModel())
     node_names = set(graph.get_graph().nodes.keys())
     assert EXPECTED_NODE_NAMES <= node_names
 
 
-# === End-to-end orchestration smoke test =================================
+# === 端到端编排冒烟测试 =======================================================================
 
 def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
-    """Run the whole graph offline: pre_extract → Phase 0→4 with HITL CONFIRM.
+    """离线运行整张图：pre_extract → Phase 0→4，HITL 回复 CONFIRM。
 
-    Asserts terminal-state keys, knowledge routing, blackboard artifacts and
-    the final report; every scripted branch of the fake model must fire.
+    断言终态字段、知识路由、blackboard（黑板）artifact 与最终报告；
+    假模型的每个脚本分支都必须被触发。
     """
     _CALL_COUNTS.clear()
     export_dir = _make_export_dir(str(tmp_path))
@@ -537,8 +536,7 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
         "sample_type": "auto",
     }))
 
-    # Every worker + extractor + phase3/4 branch answered at least one call,
-    # and no invocation fell through to the generic fallback.
+    # 每个 worker + extractor + phase3/4 分支都至少应答过一次调用，且没有调用落到通用兜底分支。
     assert _CALL_COUNTS.get("unmatched", 0) == 0
     for branch in [
         "string_analyst", "api_profiler", "export_analyzer",
@@ -547,7 +545,7 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
     ]:
         assert _CALL_COUNTS.get(branch, 0) >= 1, f"fake model branch never fired: {branch}"
 
-    # Terminal state carries the key outputs of every phase.
+    # 终态携带每个阶段的关键输出。
     assert final_state["sample_type"] == "pe"  # pre_extract 节点自动检测（imports+exports 齐全）
     assert final_state["scheduler_decision"]["action"] == "AWAITING_HUMAN_REVIEW"
     assert final_state["phase2_human_decision"] == "CONFIRM"
@@ -556,13 +554,13 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
     assert len(final_state["func_analysis_refs"]) == 1
     assert final_state["func_analysis_refs"][0]["addr"] == "0x401000"
 
-    # Phase 0 arch_detection routed the rust knowledge guide in.
+    # Phase 0 的 arch_detection 把 rust 知识指南路由了进来。
     with open(board_base_dir() + "/test_proj/meta/active_guides.json", encoding="utf-8") as f:
         guide_names = [g["name"] for g in json.load(f)["guides"]]
     assert guide_names[0] == "windows_pe"
     assert "rust" in guide_names
 
-    # Blackboard persistence: artifacts, per-phase summaries, final report.
+    # blackboard（黑板）持久化：artifact、各阶段 summary、最终报告。
     board = os.path.join(board_base_dir(), "test_proj")
     assert os.path.exists(os.path.join(board, "extracts", "strings_extract.json"))
     assert os.path.exists(os.path.join(board, "artifacts", "phase3_func_0x401000.json"))
@@ -577,7 +575,7 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
 
 
 def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
-    """MODIFY reply must restrict Phase 3 to the human-approved addresses."""
+    """MODIFY 回复必须把 Phase 3 限制在人工批准的地址范围内。"""
     _CALL_COUNTS.clear()
     export_dir = _make_export_dir(str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -595,16 +593,16 @@ def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
 
     assert final_state["phase2_human_decision"] == "MODIFY 0x401000,0x409999"
     assert final_state["human_approved_functions"] == ["0x401000", "0x409999"]
-    # Only 0x401000 exists in the boundary candidates and gets analyzed.
+    # 边界候选中只有 0x401000 存在，因此只有它会被分析。
     assert final_state["func_analysis_refs"][0]["addr"] == "0x401000"
     assert "summary" in final_state["func_analysis_refs"][0]
     assert final_state["final_report_ref"] == "bb://summary/p4_final_report"
 
 
-# === Context budget (128k) ================================================
+# === 上下文预算（128k） =================================================================
 
 def test_enforce_context_budget_passthrough():
-    """Small prompts are returned untouched (normalized to messages)."""
+    """小体积 prompt 原样返回（会先被规范化为 messages）。"""
     from graph_nodes import enforce_context_budget
     messages = [("system", "sys"), ("user", "hello")]
     result = enforce_context_budget(messages)
@@ -613,7 +611,7 @@ def test_enforce_context_budget_passthrough():
 
 
 def test_enforce_context_budget_truncates_oversized(monkeypatch, tmp_path):
-    """A single oversized message gets truncated to fit the budget."""
+    """单条超大消息会被截断以适配预算。"""
     from graph_nodes import enforce_context_budget
     # chdir 到无 config.yaml 的目录，让 MAX_CONTEXT_TOKENS 环境变量回退生效
     monkeypatch.chdir(tmp_path)
@@ -629,7 +627,7 @@ def test_enforce_context_budget_truncates_oversized(monkeypatch, tmp_path):
 
 
 def test_enforce_context_budget_raises_when_impossible(monkeypatch, tmp_path):
-    """Budget too small to hold anything must raise a clear error."""
+    """预算小到什么都装不下时必须抛出明确的错误。"""
     from graph_nodes import enforce_context_budget
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MAX_CONTEXT_TOKENS", "1")

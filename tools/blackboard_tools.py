@@ -6,12 +6,12 @@ from config import cfg
 
 
 def board_base_dir() -> str:
-    """黑板根目录：config.yaml paths.output_root（默认 data/output）。"""
+    """黑板（blackboard）根目录：config.yaml 的 paths.output_root（默认 data/output）。"""
     return cfg("paths.output_root", env="BOARD_BASE_DIR", default=os.path.join("data", "output"))
 
 
 def board_path(project_name: str, *subpaths: str) -> str:
-    """Build path under {board_base}/{project_name}/."""
+    """在 {board_base}/{project_name}/ 下拼出完整路径。"""
     return os.path.join(board_base_dir(), project_name, *subpaths)
 
 
@@ -20,20 +20,20 @@ _board_path = board_path
 
 
 def _ensure_dirs(project_name: str) -> None:
-    """Ensure all blackboard subdirectories exist."""
+    """确保黑板所有子目录都存在。"""
     for sub in ["extracts", "artifacts", "summary", "meta", "artifacts/latest"]:
         os.makedirs(board_path(project_name, *sub.split("/")), exist_ok=True)
 
 
 def _estimate_tokens(data: dict) -> int:
-    """Rough token estimate: JSON string length / 4."""
+    """粗略估算 token 数：JSON 字符串长度 / 4。"""
     return len(json.dumps(data, ensure_ascii=False)) // 4
 
 
-# --- Extracts ---
+# --- Extracts（预提取分片）---
 
 def bb_read_extract(extract_name: str, project_name: str, chunk_index: int = 0) -> dict:
-    """Read a chunk from extracts/{extract_name}.json."""
+    """从 extracts/{extract_name}.json 读取一个分片。"""
     path = board_path(project_name, "extracts", f"{extract_name}.json")
     if not os.path.exists(path):
         return {"status": "error", "reason": "extract_not_found", "path": path}
@@ -44,7 +44,7 @@ def bb_read_extract(extract_name: str, project_name: str, chunk_index: int = 0) 
     except Exception as e:
         return {"status": "error", "reason": "parse_error", "error": str(e)}
 
-    # Handle chunked reads for lists
+    # 处理列表类数据的分片读取
     if "chunk_size" in data and "functions" in data:
         chunk_size = data.get("chunk_size", 100)
         all_items = data["functions"]
@@ -69,10 +69,10 @@ def bb_read_extract(extract_name: str, project_name: str, chunk_index: int = 0) 
     return {"status": "success", "data": data}
 
 
-# --- Summaries ---
+# --- Summaries（摘要）---
 
 def bb_read_summary(summary_name: str, project_name: str) -> dict:
-    """Read a summary JSON from summary/."""
+    """从 summary/ 读取一份 summary JSON。"""
     path = board_path(project_name, "summary", f"{summary_name}.json")
     if not os.path.exists(path):
         return {"status": "error", "reason": "summary_not_found", "path": path}
@@ -85,7 +85,7 @@ def bb_read_summary(summary_name: str, project_name: str) -> dict:
 
 
 def bb_list_summaries(prefix: str, project_name: str) -> list[dict]:
-    """List all summaries matching prefix, returning their full contents."""
+    """列出所有前缀匹配的 summary，并返回其完整内容。"""
     summary_dir = board_path(project_name, "summary")
     if not os.path.exists(summary_dir):
         return []
@@ -107,7 +107,7 @@ def bb_list_summaries(prefix: str, project_name: str) -> list[dict]:
 
 
 def bb_write_summary(summary_name: str, content: dict, project_name: str) -> dict:
-    """Write a summary JSON. Enforces ≤1500 token hard limit."""
+    """写入一份 summary JSON，硬性限制 ≤1500 token。"""
     _ensure_dirs(project_name)
 
     tokens = _estimate_tokens(content)
@@ -130,10 +130,10 @@ def bb_write_summary(summary_name: str, content: dict, project_name: str) -> dic
         return {"status": "error", "reason": "write_error", "error": str(e)}
 
 
-# --- Artifacts ---
+# --- Artifacts（完整产物）---
 
 def bb_read_artifact(artifact_name: str, project_name: str) -> dict:
-    """Read a full artifact from artifacts/."""
+    """从 artifacts/ 读取完整 artifact。"""
     path = board_path(project_name, "artifacts", f"{artifact_name}.json")
     if not os.path.exists(path):
         return {"status": "error", "reason": "artifact_not_found", "path": path}
@@ -146,7 +146,7 @@ def bb_read_artifact(artifact_name: str, project_name: str) -> dict:
 
 
 def bb_write_artifact(artifact_name: str, content: dict, project_name: str) -> dict:
-    """Write a full artifact and update latest/ index."""
+    """写入完整 artifact，并更新 latest/ 索引。"""
     _ensure_dirs(project_name)
 
     path = board_path(project_name, "artifacts", f"{artifact_name}.json")
@@ -171,15 +171,15 @@ def bb_write_artifact(artifact_name: str, content: dict, project_name: str) -> d
 
 
 def bb_has_artifact(artifact_name: str, project_name: str) -> bool:
-    """Check if an artifact exists."""
+    """判断某个 artifact 是否存在。"""
     path = board_path(project_name, "artifacts", f"{artifact_name}.json")
     return os.path.exists(path)
 
 
-# --- Checkpoint / Resume ---
+# --- Checkpoint / Resume（检查点与断点续跑）---
 
 def bb_checkpoint(phase: str, project_name: str) -> dict:
-    """Save a checkpoint: update state.json and append to checkpoints.json."""
+    """保存 checkpoint：更新 state.json 并追加到 checkpoints.json。"""
     _ensure_dirs(project_name)
 
     meta_dir = board_path(project_name, "meta")
@@ -213,7 +213,7 @@ def bb_checkpoint(phase: str, project_name: str) -> dict:
 
 
 def bb_load_checkpoint(project_name: str) -> Optional[dict]:
-    """Load the latest checkpoint state. Returns None if no checkpoint exists."""
+    """加载最新的 checkpoint 状态；若无 checkpoint 则返回 None。"""
     state_path = board_path(project_name, "meta", "state.json")
     if not os.path.exists(state_path):
         return None
@@ -225,10 +225,10 @@ def bb_load_checkpoint(project_name: str) -> Optional[dict]:
         return None
 
 
-# --- Logging ---
+# --- Logging（日志）---
 
 def bb_log_event(event_type: str, details: dict, project_name: str) -> dict:
-    """Append a log event to execution_log.jsonl."""
+    """追加一条日志事件到 execution_log.jsonl。"""
     _ensure_dirs(project_name)
 
     log_path = board_path(project_name, "meta", "execution_log.jsonl")
@@ -247,15 +247,15 @@ def bb_log_event(event_type: str, details: dict, project_name: str) -> dict:
 
 
 def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) -> dict:
-    """Load decompile/disassembly snippets for a single function.
+    """为单个函数加载反编译/反汇编片段。
 
-    Args:
-        func_addr: Function address (e.g., '0x180001000').
-        export_dir: Path to the IDA export directory (contains decompile/ and disassembly/).
-        max_lines: Maximum lines to read from each file.
+    参数：
+        func_addr: 函数地址（例如 '0x180001000'）。
+        export_dir: IDA 导出目录路径（含 decompile/ 与 disassembly/）。
+        max_lines: 每个文件最多读取的行数。
 
-    Returns:
-        Dict with status, addr, name, decompile_snippet, disassembly_snippet, xrefs.
+    返回：
+        包含 status、addr、name、decompile_snippet、disassembly_snippet、xrefs 的字典。
     """
     result = {
         "status": "success",
@@ -271,7 +271,7 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
 
     addr_clean = func_addr.replace("0x", "").replace("0X", "")
 
-    # Read decompile
+    # 读取反编译产物
     decompile_path = os.path.join(export_dir, "decompile", f"{addr_clean}.c")
     if os.path.exists(decompile_path):
         try:
@@ -281,7 +281,7 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
         except Exception as e:
             result["error"] = f"decompile_read_error: {e}"
 
-    # Read disassembly
+    # 读取反汇编产物
     disasm_path = os.path.join(export_dir, "disassembly", f"{addr_clean}.asm")
     if os.path.exists(disasm_path):
         try:
@@ -297,9 +297,9 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
     return result
 
 
-# --- Utility ---
+# --- Utility（工具函数）---
 
 def _now_iso() -> str:
-    """Current timestamp in ISO format."""
+    """ISO 格式的当前时间戳。"""
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()

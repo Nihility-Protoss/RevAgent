@@ -1,8 +1,7 @@
-"""Knowledge base package: arch-specific analysis methodology files.
+"""知识库包：架构专项分析方法论文件。
 
-Knowledge files are Markdown documents with a small YAML-like frontmatter
-header (parsed by a hand-rolled parser — pyyaml is intentionally not a
-dependency). The registry is built once at import time.
+知识文件是 Markdown 文档，带有一小段类 YAML 的 frontmatter 头部（由手写解析器解析——有意不依赖 pyyaml）。
+注册表在 import 时构建一次。
 """
 import json
 import os
@@ -20,7 +19,7 @@ _DEFAULT_GUIDE = "windows_pe"
 
 @dataclass(frozen=True)
 class KnowledgeMeta:
-    """Frontmatter metadata of one knowledge file."""
+    """单个知识文件的 frontmatter 元数据。"""
 
     name: str
     title: str
@@ -32,10 +31,9 @@ class KnowledgeMeta:
 
 
 def _parse_frontmatter(text: str) -> dict:
-    """Parse the small frontmatter subset used by knowledge files.
+    """解析知识文件使用的那一小部分 frontmatter。
 
-    Supported keys: name, title, source (str); applies_to (inline list);
-    priority, max_tokens (int). Unknown keys are ignored.
+    支持的键：name、title、source（str）；applies_to（内联列表）；priority、max_tokens（int）。未知键会被忽略。
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -62,7 +60,7 @@ def _build_registry() -> dict:
     for md_path in sorted(KNOWLEDGE_DIR.glob("*.md")):
         meta = _parse_frontmatter(md_path.read_text(encoding="utf-8"))
         if not meta.get("name"):
-            continue  # not a knowledge file (missing/invalid frontmatter)
+            continue  # 不是知识文件（frontmatter 缺失或无效）
         registry[meta["name"]] = KnowledgeMeta(
             name=meta["name"],
             title=meta.get("title", meta["name"]),
@@ -79,7 +77,7 @@ KNOWLEDGE_REGISTRY: dict[str, KnowledgeMeta] = _build_registry()
 
 
 def _read_guide(meta: KnowledgeMeta) -> dict:
-    """Read one guide file, truncating to its token budget if oversized."""
+    """读取单个 guide 文件，若超出其 token 预算则截断。"""
     content = meta.path.read_text(encoding="utf-8")
     tokens = _estimate_tokens(content)
     truncated = False
@@ -99,7 +97,7 @@ def _read_guide(meta: KnowledgeMeta) -> dict:
 
 
 def _load_active(project_name: str) -> dict:
-    """Resolve the __active__ sentinel against meta/active_guides.json."""
+    """解析 __active__ 哨兵值，对照 meta/active_guides.json 确定生效的 guide 集合。"""
     meta_path = _board_path(project_name, "meta", "active_guides.json")
     names = [_DEFAULT_GUIDE]
     if os.path.exists(meta_path):
@@ -128,13 +126,9 @@ def _load_active(project_name: str) -> dict:
 
 
 def match_guides(arch_detection: dict) -> list[str]:
-    """Map an arch_detection dict to active guide names via applies_to tags.
+    """依据 applies_to 标签，把 arch_detection dict 映射为生效的 guide 名称列表。
 
-    Baseline guides (applies_to contains "baseline", e.g. windows_pe) are
-    always included. Other guides declare "key:value" tags where key is an
-    arch_detection field (e.g. language, sample_form); the guide is included
-    when that field matches value (case-insensitive). When confidence is low
-    (or unset), only baseline guides are active.
+    基线 guide（applies_to 含 "baseline"，例如 windows_pe）始终包含。其他 guide 声明 "key:value" 形式的标签，其中 key 是 arch_detection 的字段（例如 language、sample_form）；当该字段与 value 匹配（不区分大小写）时该 guide 被包含。当 confidence 为 low（或未设置）时，只有基线 guide 生效。
     """
     arch = arch_detection or {}
     confidence = str(arch.get("confidence") or "low").lower()
@@ -167,9 +161,9 @@ def match_guides(arch_detection: dict) -> list[str]:
 
 
 def load_knowledge(name: str, project_name: str) -> dict:
-    """Load one knowledge guide by name (or __active__ for sample-resolved set).
+    """按名称加载单个知识 guide（或用 __active__ 表示按样本解析出的集合）。
 
-    Returns the standard tool result dict; never raises.
+    返回标准的 tool 结果 dict；从不抛异常。
     """
     try:
         if name == _ACTIVE_SENTINEL:
@@ -182,5 +176,5 @@ def load_knowledge(name: str, project_name: str) -> dict:
                 "available": sorted(KNOWLEDGE_REGISTRY),
             }
         return _read_guide(meta)
-    except Exception as exc:  # defensive: tools must not raise
+    except Exception as exc:  # 防御性：tool 不允许抛异常
         return {"status": "error", "error": f"load_error: {exc}"}

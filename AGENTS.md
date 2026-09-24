@@ -206,7 +206,7 @@ pytest -v
 
 ## 5. 代码风格与开发约定
 
-- **语言**：源码中注释以中文为主，docstring 以英文为主。新增代码保持这一风格。
+- **语言**：源码中注释与 docstring 一律使用中文，技术术语保留英文。新增代码保持这一风格。
 - **缩进**：4 空格，不换行符特别要求。
 - **类型提示**：使用 `typing`（`Dict`, `List`, `Any`, `Optional`）或 3.10+ 的 `|` 联合类型（当前代码两种都有）。
 - **错误处理**：Tool 函数统一返回 `{"status": "success|error", "error": None|str, ...}`，禁止直接抛出异常给上层；纯函数节点（如 `pre_extract_node`）允许抛出 `RuntimeError` 中止整轮分析。

@@ -1,7 +1,4 @@
-"""LangGraph node factory and business nodes.
-
-Replaces workers/orchestrator.py (ADK dynamic workflow + handwritten Runners)
-and agent.py (_persist_worker_output / extractor Runner loops).
+"""LangGraph 节点工厂与业务节点。
 """
 import json
 import os
@@ -43,7 +40,8 @@ _LLM = None
 
 
 def get_llm():
-    """Return the shared chat model (config.yaml > env vars > defaults)."""
+    """返回共享 chat model（优先级：config.yaml > 环境变量 > 默认值）。
+    """
     global _LLM
     if _LLM is None:
         load_dotenv()
@@ -62,7 +60,8 @@ def get_llm():
 
 
 def set_llm(llm) -> None:
-    """Inject a model instance (used by tests to run offline)."""
+    """注入一个模型实例（供测试离线运行使用）。
+    """
     global _LLM
     _LLM = llm
 
@@ -70,7 +69,8 @@ def set_llm(llm) -> None:
 # === 上下文预算（所有 agent 共享 128k 上限）===
 
 def max_context_tokens() -> int:
-    """单次 LLM 调用的输入 token 上限（config.yaml llm.max_context_tokens，默认 128k）。"""
+    """单次 LLM 调用的输入 token 上限（config.yaml llm.max_context_tokens，默认 128k）。
+    """
     return cfg_int("llm.max_context_tokens", env="MAX_CONTEXT_TOKENS", default=128000)
 
 
@@ -80,10 +80,9 @@ def _summary_trigger_tokens() -> int:
 
 
 def enforce_context_budget(messages: list) -> list:
-    """Trim message contents so the total estimate fits the context budget.
+    """裁剪消息内容，使总体估算量落在上下文预算内。
 
-    Strategy: truncate the longest message contents first (middle of the text,
-    keeping head and tail); raise RuntimeError if still over budget.
+    策略：优先截断最长的消息内容（从文本中间截掉，保留头尾）；若仍超预算则抛出 RuntimeError。
     """
     budget = max_context_tokens()
     normalized = convert_to_messages(messages)
@@ -93,7 +92,7 @@ def enforce_context_budget(messages: list) -> list:
         if total <= budget:
             return normalized
 
-        # 估算每条约消息的 token，用于定位可截断的大消息
+        # 估算每条消息的 token，用于定位可截断的大消息
         per_msg = [count_tokens_approximately([m]) for m in normalized]
         excess = total - budget
         # 从大到小截断，正文保留头尾各一半
@@ -127,14 +126,16 @@ def enforce_context_budget(messages: list) -> list:
 
 
 async def invoke_guarded(model, messages: list, config: Optional[RunnableConfig] = None):
-    """ainvoke with context-budget enforcement (128k by default)."""
+    """带上下文预算约束的 ainvoke（默认 128k）。
+    """
     return await model.ainvoke(enforce_context_budget(messages), config=config)
 
 
 # === 通用辅助 ===
 
 def parse_json_loose(text: Any) -> dict:
-    """Best-effort JSON parse of model output; never raises."""
+    """尽力解析模型输出的 JSON，永不抛异常。
+    """
     if isinstance(text, dict):
         return text
     if not isinstance(text, str):
@@ -170,7 +171,8 @@ async def run_extraction(
     llm=None,
     config: Optional[RunnableConfig] = None,
 ) -> Optional[dict]:
-    """Run the summary extractor as a plain LLM call and persist the summary."""
+    """以普通 LLM 调用方式运行 summary extractor，并持久化 summary。
+    """
     model = llm or get_llm()
     prompt = build_extraction_prompt(artifact, artifact_type)
     resp = await invoke_guarded(model, [("user", prompt)], config=config)
@@ -189,10 +191,7 @@ async def run_extraction(
 # === Worker 节点工厂（替代 ADK LlmAgent + output_key）===
 
 def make_worker_node(spec: WorkerSpec, llm=None):
-    """Compile a WorkerSpec into a LangGraph node function.
-
-    The model is resolved lazily on first node execution so that building the
-    graph (e.g. to inspect its topology) never requires API credentials.
+    """把一个 WorkerSpec 编译为 LangGraph 节点函数。
     """
     _cache: dict = {}
 
@@ -247,7 +246,9 @@ def make_worker_node(spec: WorkerSpec, llm=None):
 # === Phase -1: 预提取（纯函数节点）===
 
 def pre_extract_node(state: AnalysisState) -> dict:
-    """Run Phase -1 pre-extraction into the blackboard (skipped on resume)."""
+    """
+    把 Phase -1 预提取结果写入黑板（resume 时跳过）。
+    """
     project = state["sample_project_name"]
     existing = bb_load_checkpoint(project)
     if state.get("resume") and existing is not None:
@@ -282,13 +283,11 @@ def pre_extract_node(state: AnalysisState) -> dict:
 # === 知识路由（纯函数节点，逻辑照搬原 orchestrator.resolve_active_guides）===
 
 def resolve_active_guides(project_name: str, arch_detection: Optional[dict] = None) -> dict:
-    """Resolve which knowledge guides are active for this sample.
+    """解析本样本激活了哪些知识指南。
 
-    Uses the provided arch_detection when given (Phase 0 string analysis in
-    graph state); otherwise reads it from strings_summary on the blackboard.
-    Matches it against the knowledge registry and persists the result to
-    meta/active_guides.json. Never raises: on any failure falls back to the
-    windows_pe baseline.
+    若传入 arch_detection 则直接使用（来自图状态中的 Phase 0 字符串分析）；
+    否则从黑板上的 strings_summary 读取。将其与知识注册表匹配，并把结果持久化到
+    meta/active_guides.json。永不抛异常：任何失败都回退到 windows_pe 基线。
     """
     if arch_detection is not None:
         arch = arch_detection or {}
@@ -334,7 +333,8 @@ def resolve_active_guides(project_name: str, arch_detection: Optional[dict] = No
 
 
 def resolve_guides_node(state: AnalysisState) -> dict:
-    """Resolve active knowledge guides from Phase 0 arch_detection."""
+    """依据 Phase 0 的 arch_detection 解析激活的知识指南。
+    """
     string_analysis = state.get("string_analysis") or {}
     arch = string_analysis.get("arch_detection") if isinstance(string_analysis, dict) else None
     resolve_active_guides(state["sample_project_name"], arch_detection=arch)
@@ -342,7 +342,8 @@ def resolve_guides_node(state: AnalysisState) -> dict:
 
 
 def _load_active_guides_text(project_name: str) -> str:
-    """Concatenate full text of all active guides for prompt injection."""
+    """拼接所有激活指南的完整文本，用于注入 prompt。
+    """
 
     def _fallback() -> str:
         result = load_knowledge("__active__", project_name)
@@ -391,7 +392,8 @@ APPROVAL_MESSAGE_TEMPLATE = """=== 恶意样本初步分析审查 ===
 
 
 def build_review_message(state: dict) -> str:
-    """Build human-readable review message from graph state."""
+    """根据图状态构建人类可读的审查消息。
+    """
     behavior_profile = state.get("behavior_profile") or {}
     string_analysis = state.get("string_analysis") or {}
     api_behavior = state.get("api_behavior_analysis") or {}
@@ -423,7 +425,8 @@ def build_review_message(state: dict) -> str:
 
 
 def parse_approval_reply(text: str) -> tuple[str, Optional[list[str]]]:
-    """Parse CONFIRM or MODIFY reply from human reviewer."""
+    """解析人工审查者回复的 CONFIRM 或 MODIFY。
+    """
     text_stripped = text.strip()
     if text_stripped.upper() == "CONFIRM":
         return ("confirm", None)
@@ -434,12 +437,14 @@ def parse_approval_reply(text: str) -> tuple[str, Optional[list[str]]]:
 
 
 def prompt_human(message: str) -> str:
-    """Read one reply line from the analyst (module-level for test monkeypatching)."""
+    """从分析师读取一行回复（模块级定义，便于测试 monkeypatch）。
+    """
     return input(message)
 
 
 def approval_gate_node(state: AnalysisState) -> dict:
-    """Phase 2→3 human approval gate (CLI). 3 次无效回复后默认 CONFIRM 放行。"""
+    """Phase 2→3 人工审批门（CLI）。3 次无效回复后默认 CONFIRM 放行。
+    """
     print(build_review_message(state))
     max_attempts = 3
     for attempt in range(max_attempts):
@@ -459,7 +464,8 @@ def approval_gate_node(state: AnalysisState) -> dict:
 # === Phase 3: 函数级深度分析（串行循环，Send 并行留待 Step 3）===
 
 def make_phase3_node(llm=None):
-    """Build the Phase 3 per-function deep-analysis node (serial loop)."""
+    """构建 Phase 3 逐函数深度分析节点（串行循环）。
+    """
 
     async def phase3_deep_analysis_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
         model = llm or get_llm()
@@ -517,7 +523,8 @@ def make_phase3_node(llm=None):
 # === Phase 4: 综合报告（Map-Reduce，分片串行为小模型稳定性保留）===
 
 def _read_phase01_summaries(project_name: str) -> dict:
-    """Read the five Phase 0/1 summaries from the blackboard."""
+    """从黑板读取 Phase 0/1 的五份 summary。
+    """
     return {
         "p0_strings": bb_read_summary("strings_summary", project_name),
         "p0_api": bb_read_summary("api_summary", project_name),
@@ -532,7 +539,8 @@ def _summary_data(summary: dict) -> dict:
 
 
 def make_shard_synthesis_node(llm=None):
-    """Build the Phase 4 map node: shard synthesis over suspicious functions."""
+    """构建 Phase 4 的 map 节点：对可疑函数做分片综合。
+    """
 
     async def shard_synthesis_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
         model = llm or get_llm()
@@ -583,7 +591,8 @@ def make_shard_synthesis_node(llm=None):
 
 
 def make_aggregator_node(llm=None):
-    """Build the Phase 4 reduce node: aggregate shard reports into final report."""
+    """构建 Phase 4 的 reduce 节点：把各分片报告聚合为最终报告。
+    """
 
     async def aggregator_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
         model = llm or get_llm()

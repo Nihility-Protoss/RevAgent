@@ -1,7 +1,7 @@
-"""Tests for workers.extractor pure functions (post LangGraph migration).
+"""workers.extractor 纯函数测试（LangGraph 迁移后）。
 
-The ADK LlmAgent `extractor_agent` is gone; extraction is a plain
-`llm.ainvoke` inside the graph nodes, driven by build_extraction_prompt.
+ADK LlmAgent `extractor_agent` 已移除；提取现在是 graph 节点内的一次普通
+`llm.ainvoke` 调用，由 build_extraction_prompt 驱动。
 """
 from workers.extractor import SUMMARY_SCHEMAS, build_extraction_prompt
 

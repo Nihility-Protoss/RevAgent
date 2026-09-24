@@ -7,7 +7,7 @@ from tools.blackboard_tools import bb_write_summary, board_path
 
 
 def test_summary_too_large_rejected():
-    # Windows: file handles may still be open during cleanup
+    # Windows 下清理期间文件句柄可能仍未释放
     ignore_cleanup = sys.platform == "win32"
     orig_cwd = os.getcwd()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=ignore_cleanup) as tmpdir:
@@ -15,7 +15,7 @@ def test_summary_too_large_rejected():
         try:
             os.makedirs(board_path("test", "summary"), exist_ok=True)
 
-            large = {"items": ["x" * 200 for _ in range(200)]}  # ~40k chars = ~10k tokens
+            large = {"items": ["x" * 200 for _ in range(200)]}  # 约 40k 字符 = 约 10k tokens
             result = bb_write_summary("too_big", large, "test")
             assert result["status"] == "error"
             assert "summary_too_large" in result["reason"]
@@ -24,7 +24,7 @@ def test_summary_too_large_rejected():
 
 
 def test_state_recovery_after_worker_failure():
-    """Simulated: checkpoint exists, worker status=failed, should skip."""
+    """模拟场景：checkpoint 已存在、worker 状态为 failed，应当跳过。"""
     ignore_cleanup = sys.platform == "win32"
     orig_cwd = os.getcwd()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=ignore_cleanup) as tmpdir:

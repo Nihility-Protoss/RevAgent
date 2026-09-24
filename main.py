@@ -1,7 +1,7 @@
-"""Runtime entry: build the LangGraph graph and run the analysis.
+"""运行时入口：构建 LangGraph 图并执行分析。
 
-Replaces agent.py (ADK Runner + setup_fn HITL). Configuration is collected
-via CLI args / env vars instead of a RequestInput text protocol.
+替代原 agent.py（ADK Runner + setup_fn HITL）。配置改为通过 CLI 参数 / 环境变量收集，
+不再使用 RequestInput 文本协议。
 """
 import argparse
 import asyncio
@@ -19,18 +19,17 @@ async def run_analysis_with_blackboard(
     sample_export_dir: Optional[str] = None,
     resume: bool = False,
 ):
-    """Run the complete analysis workflow with blackboard context management.
+    """运行带 blackboard（黑板）上下文管理的完整分析工作流。
 
     Args:
-        sample_project_name: Sample project name (data/output/ subdirectory).
-        input_name: Optional export dir name under data/input/ (with or without
-            the _export_for_ai suffix). Resolved automatically when omitted.
-        sample_export_dir: Explicit IDA export directory; bypasses data/input/
-            auto-discovery when given.
-        resume: If True, skip Phase -1 when a checkpoint already exists.
+        sample_project_name: 样本项目名（data/output/ 下的子目录名）。
+        input_name: 可选的 data/input/ 导出目录名（可带或不带 _export_for_ai 后缀）；
+            省略时自动解析。
+        sample_export_dir: 显式指定的 IDA 导出目录；给出时绕过 data/input/ 自动发现。
+        resume: 为 True 且已存在 checkpoint 时跳过 Phase -1。
 
     Returns:
-        Tuple of (final_state, token_report)
+        (final_state, token_report) 元组。
     """
     from graph import build_graph
     from observability import TokenStatsCallback
@@ -47,6 +46,7 @@ async def run_analysis_with_blackboard(
         sample_export_dir = resolved["export_dir"]
 
     graph = build_graph()
+    graph.get_graph().draw_mermaid_png(output_file_path="data/graph.png")
     token_callback = TokenStatsCallback(sample_project_name)
 
     initial_state = {

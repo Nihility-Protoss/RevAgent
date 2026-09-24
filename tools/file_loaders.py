@@ -39,7 +39,7 @@ def resolve_export_dir(
            > project_name 前缀匹配 > 唯一候选自动选用。
 
     Returns:
-        Dict with status, export_dir, candidates.
+        包含 status、export_dir、candidates 的字典。
     """
     input_root = input_root or default_input_root()
     candidates = find_export_dirs(input_root)
@@ -97,10 +97,10 @@ def resolve_export_dir(
 
 
 def pre_extract_sample(export_dir: str, project_name: str, output_base: str = ".") -> dict:
-    """Phase -1: Pre-extract all raw IDA export files into structured JSON.
+    """Phase -1：把所有原始 IDA 导出文件预提取为结构化 JSON。
 
-    No content filtering — only minimal cleaning (strip empty lines, fix encoding).
-    Outputs go to {output_base}/{board_base}/{project_name}/extracts/.
+    不做内容过滤，只做最小化清理（去空行、修编码）。
+    输出目录为 {output_base}/{board_base}/{project_name}/extracts/。
     """
     result = {"status": "success", "error": None, "extracts_dir": None}
 
@@ -110,22 +110,22 @@ def pre_extract_sample(export_dir: str, project_name: str, output_base: str = ".
         os.makedirs(extracts_dir, exist_ok=True)
         result["extracts_dir"] = extracts_dir
 
-        # strings.txt
+        # 处理 strings.txt
         strings_path = os.path.join(export_dir, "strings.txt")
         if os.path.exists(strings_path):
             _extract_strings(strings_path, extracts_dir)
 
-        # imports.txt
+        # 处理 imports.txt
         imports_path = os.path.join(export_dir, "imports.txt")
         if os.path.exists(imports_path):
             _extract_imports(imports_path, extracts_dir)
 
-        # exports.txt
+        # 处理 exports.txt
         exports_path = os.path.join(export_dir, "exports.txt")
         if os.path.exists(exports_path):
             _extract_exports(exports_path, extracts_dir)
 
-        # function_index.txt
+        # 处理 function_index.txt
         func_idx_path = os.path.join(export_dir, "function_index.txt")
         if os.path.exists(func_idx_path):
             _extract_functions(func_idx_path, export_dir, extracts_dir)
@@ -138,7 +138,7 @@ def pre_extract_sample(export_dir: str, project_name: str, output_base: str = ".
 
 
 def _extract_strings(strings_path: str, extracts_dir: str) -> None:
-    """Parse IDA strings.txt into structured JSON."""
+    """解析 IDA 的 strings.txt 为结构化 JSON。"""
     with open(strings_path, "r", encoding="utf-8", errors="ignore") as f:
         lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
@@ -189,7 +189,7 @@ def _extract_strings(strings_path: str, extracts_dir: str) -> None:
 
 
 def _extract_imports(imports_path: str, extracts_dir: str) -> None:
-    """Parse IDA imports.txt into structured JSON."""
+    """解析 IDA 的 imports.txt 为结构化 JSON。"""
     with open(imports_path, "r", encoding="utf-8", errors="ignore") as f:
         lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
@@ -216,7 +216,7 @@ def _extract_imports(imports_path: str, extracts_dir: str) -> None:
 
 
 def _extract_exports(exports_path: str, extracts_dir: str) -> None:
-    """Parse IDA exports.txt into structured JSON."""
+    """解析 IDA 的 exports.txt 为结构化 JSON。"""
     with open(exports_path, "r", encoding="utf-8", errors="ignore") as f:
         lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
@@ -238,7 +238,7 @@ def _extract_exports(exports_path: str, extracts_dir: str) -> None:
 
 
 def _extract_functions(func_idx_path: str, export_dir: str, extracts_dir: str) -> None:
-    """Parse IDA function_index.txt into structured JSON + manifest."""
+    """解析 IDA 的 function_index.txt 为结构化 JSON + manifest。"""
     with open(func_idx_path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
@@ -295,13 +295,13 @@ def _extract_functions(func_idx_path: str, export_dir: str, extracts_dir: str) -
 
 
 def load_strings(file_path: str) -> Dict[str, Any]:
-    """Load and categorize strings from IDA-exported strings.txt.
+    """从 IDA 导出的 strings.txt 中加载并分类字符串。
 
     Args:
-        file_path: Path to strings.txt file.
+        file_path: strings.txt 文件路径。
 
     Returns:
-        Dict with status, all_strings, and categorized strings.
+        包含 status、all_strings 及各类别字符串的字典。
     """
     result = {
         "status": "success",
@@ -330,25 +330,25 @@ def load_strings(file_path: str) -> Dict[str, Any]:
 
         for s in lines:
             s_lower = s.lower()
-            # Data filenames
+            # 数据文件名
             if any(ext in s_lower for ext in [".dat", ".pptx", ".ini", ".config", ".bin"]):
                 result["data_filenames"].append(s)
-            # PDB paths
+            # PDB 路径
             if ".pdb" in s_lower:
                 result["pdb_paths"].append(s)
-            # URLs
+            # URL
             if s.startswith("http://") or s.startswith("https://"):
                 result["urls"].append(s)
-            # Registry paths
+            # 注册表路径
             if "HKCU" in s or "HKLM" in s or "registry" in s_lower:
                 result["registry_paths"].append(s)
-            # Mutex names
+            # 互斥体名
             if "Global\\" in s or "Local\\" in s:
                 result["mutex_names"].append(s)
-            # PowerShell params
+            # PowerShell 参数
             if any(p in s_lower for p in ["-enc", "-encodedcommand", "-windowstyle hidden", "-noprofile"]):
                 result["powershell_params"].append(s)
-            # Suspicious keywords (cmd, powershell, etc.)
+            # 可疑关键字（cmd、powershell 等）
             if any(k in s_lower for k in ["cmd /c", "cmd /k", "powershell", "wscript", "cscript"]):
                 result["suspicious_keywords"].append(s)
 
@@ -360,13 +360,13 @@ def load_strings(file_path: str) -> Dict[str, Any]:
 
 
 def load_exports(file_path: str) -> Dict[str, Any]:
-    """Load export table from IDA-exported exports.txt.
+    """从 IDA 导出的 exports.txt 中加载导出表。
 
     Args:
-        file_path: Path to exports.txt file.
+        file_path: exports.txt 文件路径。
 
     Returns:
-        Dict with status, exports list, ordinal mapping, and loading pattern indicators.
+        包含 status、exports 列表、序号映射和加载模式指标的字典。
     """
     result = {
         "status": "success",
@@ -394,13 +394,13 @@ def load_exports(file_path: str) -> Dict[str, Any]:
 
         for line in lines:
             name_lower = line.lower()
-            # Check for TLS callback
+            # 检查 TLS 回调
             if "tlscallback" in name_lower:
                 result["has_tls_callback"] = True
-            # Check for suspicious names
+            # 检查可疑名称
             if any(sus in name_lower for sus in suspicious_names):
                 result["suspicious_export_names"].append(line)
-            # Build ordinal mapping (format: ordinal name address)
+            # 构建序号映射（格式：ordinal name address）
             parts = line.split()
             if len(parts) >= 3:
                 try:
@@ -423,13 +423,13 @@ def load_exports(file_path: str) -> Dict[str, Any]:
 
 
 def load_imports(file_path: str) -> Dict[str, Any]:
-    """Load import table from IDA-exported imports.txt.
+    """从 IDA 导出的 imports.txt 中加载导入表。
 
     Args:
-        file_path: Path to imports.txt file.
+        file_path: imports.txt 文件路径。
 
     Returns:
-        Dict with status, imports list, dll mapping, and API categories.
+        包含 status、imports 列表、DLL 映射和 API 分类的字典。
     """
     result = {
         "status": "success",
@@ -481,7 +481,7 @@ def load_imports(file_path: str) -> Dict[str, Any]:
         current_dll = "unknown"
 
         for line in lines:
-            # DLL name line (often just the DLL name)
+            # DLL 名称行（通常整行就是 DLL 名）
             if line.lower().endswith(".dll"):
                 current_dll = line
                 result["dll_to_apis"][current_dll] = []
@@ -493,12 +493,12 @@ def load_imports(file_path: str) -> Dict[str, Any]:
             result["dll_to_apis"][current_dll].append(line)
 
             line_lower = line.lower()
-            # Categorize API
+            # API 归类
             for category, signatures in api_signatures.items():
                 if any(sig in line_lower for sig in signatures):
                     result["api_categories"][category].append(f"{current_dll}!{line}")
 
-            # Check for ordinal imports
+            # 检查序号导入
             if line.startswith("Ordinal_") or line.startswith("ordinal"):
                 result["ordinal_imports"].append(f"{current_dll}!{line}")
 
@@ -510,13 +510,13 @@ def load_imports(file_path: str) -> Dict[str, Any]:
 
 
 def load_function_index(file_path: str) -> Dict[str, Any]:
-    """Load function index from IDA-exported function_index.txt.
+    """从 IDA 导出的 function_index.txt 中加载函数索引。
 
     Args:
-        file_path: Path to function_index.txt file.
+        file_path: function_index.txt 文件路径。
 
     Returns:
-        Dict with status and function list (address, name, size, xrefs).
+        包含 status 和函数列表（address、name、size、xrefs）的字典。
     """
     result = {
         "status": "success",
@@ -536,8 +536,8 @@ def load_function_index(file_path: str) -> Dict[str, Any]:
             lines = [line.strip() for line in f if line.strip()]
 
         for line in lines:
-            # Expected format: address name size xrefs
-            # e.g.: "0x401000 sub_401000 256 12"
+            # 预期格式：address name size xrefs
+            # 例如："0x401000 sub_401000 256 12"
             parts = line.split()
             if len(parts) >= 2:
                 func_entry = {
@@ -558,13 +558,13 @@ def load_function_index(file_path: str) -> Dict[str, Any]:
 
 
 def load_pe_info(file_path: str) -> Dict[str, Any]:
-    """Load pre-generated PE info from pe_info.json.
+    """从 pe_info.json 中加载预生成的 PE 信息。
 
     Args:
-        file_path: Path to pe_info.json file.
+        file_path: pe_info.json 文件路径。
 
     Returns:
-        Dict with PE header and section information.
+        包含 PE 头和节区信息的字典。
     """
     result = {
         "status": "success",
@@ -590,13 +590,13 @@ def load_pe_info(file_path: str) -> Dict[str, Any]:
 
 
 def detect_sample_type(export_dir: str) -> Dict[str, Any]:
-    """Detect sample type based on exported files.
+    """根据导出文件判定样本类型。
 
     Args:
-        export_dir: Path to the IDA export directory.
+        export_dir: IDA 导出目录路径。
 
     Returns:
-        Dict with detected type and confidence.
+        包含判定类型和置信度的字典。
     """
     result = {
         "status": "success",
@@ -622,7 +622,7 @@ def detect_sample_type(export_dir: str) -> Dict[str, Any]:
             result["confidence"] = "high"
             result["indicators"].append("PE export files present")
         elif has_strings:
-            # Try to infer from strings
+            # 尝试从字符串推断
             strings_result = load_strings(os.path.join(export_dir, "strings.txt"))
             if strings_result["status"] == "success":
                 all_str = " ".join(strings_result["all_strings"]).lower()

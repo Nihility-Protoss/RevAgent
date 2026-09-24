@@ -6,7 +6,7 @@ from tools.file_loaders import load_strings, load_exports, load_imports, load_fu
 from tools.pe_utils import calculate_entropy
 
 
-# === Tests for load_strings ===
+# === load_strings 测试 ===
 
 def test_load_strings_basic():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -35,7 +35,7 @@ def test_load_strings_not_found():
     assert "not found" in result["error"].lower()
 
 
-# === Tests for load_exports ===
+# === load_exports 测试 ===
 
 def test_load_exports_basic():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -55,7 +55,7 @@ def test_load_exports_basic():
         assert len(result["ordinal_mapping"]) == 3
 
 
-# === Tests for load_imports ===
+# === load_imports 测试 ===
 
 def test_load_imports_basic():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -75,7 +75,7 @@ def test_load_imports_basic():
         assert len(result["api_categories"]["registry"]) == 1
 
 
-# === Tests for load_function_index ===
+# === load_function_index 测试 ===
 
 def test_load_function_index_basic():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -93,7 +93,7 @@ def test_load_function_index_basic():
         assert result["functions"][0]["xrefs"] == 5
 
 
-# === Tests for load_pe_info ===
+# === load_pe_info 测试 ===
 
 def test_load_pe_info_basic():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -106,11 +106,11 @@ def test_load_pe_info_basic():
         assert result["pe_info"]["machine"] == "x64"
 
 
-# === Tests for detect_sample_type ===
+# === detect_sample_type 测试 ===
 
 def test_detect_sample_type_pe():
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create PE indicator files
+        # 创建 PE 标志文件
         open(os.path.join(tmpdir, "exports.txt"), "w").close()
         open(os.path.join(tmpdir, "imports.txt"), "w").close()
 
@@ -120,10 +120,11 @@ def test_detect_sample_type_pe():
         assert result["confidence"] == "high"
 
 
-# === Tests for calculate_entropy ===
+# === calculate_entropy 测试 ===
 
 def test_calculate_entropy_uniform():
-    """Uniform distribution should have max entropy ~8.0 for byte values."""
+    """均匀分布的字节值应具有最大熵 ~8.0。
+    """
     data = bytes(range(256))
     result = calculate_entropy(data)
     assert result["status"] == "success"
@@ -131,7 +132,8 @@ def test_calculate_entropy_uniform():
 
 
 def test_calculate_entropy_constant():
-    """Constant data should have entropy 0."""
+    """常量数据的熵应为 0。
+    """
     data = b"\x00" * 256
     result = calculate_entropy(data)
     assert result["status"] == "success"
@@ -139,7 +141,8 @@ def test_calculate_entropy_constant():
 
 
 def test_calculate_entropy_high():
-    """Encrypted/compressed data should have high entropy > 7.0."""
+    """加密/压缩数据应具有高熵 > 7.0。
+    """
     import random
     random.seed(42)
     data = bytes([random.randint(0, 255) for _ in range(1024)])
@@ -148,7 +151,7 @@ def test_calculate_entropy_high():
     assert result["entropy"] > 7.0
 
 
-# === Tests for data/input auto-discovery ===
+# === data/input 自动发现测试 ===
 
 def _make_input_root(tmpdir, names):
     input_root = os.path.join(tmpdir, "data", "input")

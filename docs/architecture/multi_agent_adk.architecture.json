@@ -2,46 +2,43 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "multi-agent-adk：PE 恶意样本静态分析多智能体系统",
+    "title": "multi-agent-adk：PE 恶意样本静态分析多智能体系统（LangGraph 架构）",
     "quality_profile": "showcase",
-    "viewBox": [1360, 680]
+    "viewBox": [1440, 660],
+    "views": [
+      { "id": "main-chain", "label": "主调用链", "focus": ["cli", "entry", "graph", "workers", "llm"], "note": "从 CLI 入口到 StateGraph 编排，再到 Worker ReAct 循环调用 LLM 的完整链路。" },
+      { "id": "board-knowledge", "label": "黑板与知识库", "focus": ["tools", "board", "kb", "workers"], "note": "Worker 经最小工具集读写 data/output 黑板，并按 arch_detection 按需加载方法论知识。" },
+      { "id": "human-observability", "label": "人工审批与观测", "focus": ["graph", "hitl", "observ", "llm"], "note": "approval_gate 在 Phase 2 后阻塞等待人工确认；TokenStatsCallback 全程聚合 token 用量。" }
+    ]
   },
   "components": [
-    { "id": "idaExport", "type": "external", "label": "IDA 导出目录", "sublabel": "strings / imports / exports / function_index", "pos": [48, 300], "size": [176, 72] },
-    { "id": "orchestrator", "type": "backend", "label": "analysis_orchestrator", "sublabel": "动态编排 · 阶段门控 checkpoint", "pos": [268, 288], "size": [180, 96] },
-    { "id": "p0String", "type": "backend", "label": "String Artifact Analyst", "sublabel": "strings.txt 快速定性", "pos": [520, 96], "size": [200, 64] },
-    { "id": "p0Api", "type": "backend", "label": "API Behavior Profiler", "sublabel": "imports.txt · MITRE 映射", "pos": [520, 208], "size": [200, 64] },
-    { "id": "p0Export", "type": "backend", "label": "Export Interface Analyzer", "sublabel": "exports.txt · 加载方式判定", "pos": [520, 320], "size": [200, 64] },
-    { "id": "extractor", "type": "backend", "label": "Extractor Agent", "sublabel": "artifact 压缩为摘要", "pos": [800, 208], "size": [180, 64] },
-    { "id": "p1Behavior", "type": "backend", "label": "Behavior Profile Synthesizer", "sublabel": "RAT / Stealer / Loader 定型", "pos": [1060, 152], "size": [210, 64] },
-    { "id": "p1Function", "type": "backend", "label": "Function Boundary Detector", "sublabel": "推荐 Top 20 候选函数", "pos": [1060, 288], "size": [210, 64] },
-    { "id": "scheduler", "type": "backend", "label": "Scheduler Agent", "sublabel": "Phase 2 · 整合摘要生成决策", "pos": [1060, 470], "size": [210, 70] },
-    { "id": "hitl", "type": "external", "label": "人工审查 (HITL)", "sublabel": "回复 CONFIRM / MODIFY", "pos": [800, 470], "size": [180, 70] },
-    { "id": "p3Func", "type": "backend", "label": "Function Deep Analyzer", "sublabel": "Phase 3 · 逐函数动态循环", "pos": [520, 470], "size": [200, 70] },
-    { "id": "p4Synthesis", "type": "backend", "label": "Synthesis Agent", "sublabel": "Phase 4 · Map-Reduce 综合报告", "pos": [268, 470], "size": [180, 70] },
-    { "id": "blackboard", "type": "database", "label": "Blackboard 黑板", "sublabel": ".blackboard/{project}/", "pos": [48, 470], "size": [160, 72] }
+    { "id": "cli", "type": "external", "label": "分析师 CLI", "sublabel": "python main.py -p <project> [-i] [-r]", "pos": [40, 300], "size": [170, 72] },
+    { "id": "idaExport", "type": "external", "label": "IDA 导出目录", "sublabel": "data/input/*_export_for_ai/", "pos": [40, 450], "size": [170, 84] },
+    { "id": "entry", "type": "backend", "label": "main.py 入口", "sublabel": "run_analysis_with_blackboard · resume 续跑", "pos": [290, 340], "size": [190, 84] },
+    { "id": "observ", "type": "backend", "label": "TokenStatsCallback", "sublabel": "observability.py · 按节点聚合 token", "pos": [1090, 96], "size": [210, 80] },
+    { "id": "hitl", "type": "security", "label": "approval_gate 审批门", "sublabel": "CLI 阻塞 · CONFIRM / MODIFY", "pos": [520, 96], "size": [200, 84], "tag": "HITL" },
+    { "id": "graph", "type": "backend", "label": "LangGraph StateGraph", "sublabel": "graph.py 单一编排 · 并行扇出/扇入", "pos": [560, 330], "size": [190, 100] },
+    { "id": "workers", "type": "backend", "label": "Worker 节点工厂", "sublabel": "make_worker_node · WorkerSpec × 6", "pos": [830, 330], "size": [200, 100] },
+    { "id": "llm", "type": "cloud", "label": "DeepSeek API", "sublabel": "deepseek-flash · OpenAI 兼容端点", "pos": [1120, 330], "size": [180, 90] },
+    { "id": "kb", "type": "database", "label": "方法论知识库", "sublabel": "workers/knowledge · arch_detection 路由", "pos": [520, 546], "size": [190, 84] },
+    { "id": "tools", "type": "backend", "label": "FunctionTool 层", "sublabel": "file_loaders · blackboard_tools · pe_utils", "pos": [800, 530], "size": [210, 84] },
+    { "id": "board", "type": "database", "label": "Blackboard 黑板", "sublabel": "data/output/{project}/", "pos": [1120, 538], "size": [190, 90] }
   ],
   "boundaries": [
-    { "kind": "region", "label": "Phase 0 · Triage 快速定性（3 Worker 并行）", "wraps": ["p0String", "p0Api", "p0Export"] },
-    { "kind": "region", "label": "Phase 1 · Deep 行为定型与函数筛选", "wraps": ["p1Behavior", "p1Function"] },
-    { "kind": "region", "label": "Phase 2–4 · 调度审查与深度分析", "wraps": ["scheduler", "hitl", "p3Func", "p4Synthesis"] }
+    { "kind": "region", "label": "LangGraph 编排内核（graph.py 单一 StateGraph）", "wraps": ["graph", "workers", "hitl"] },
+    { "kind": "region", "label": "工具与持久化层", "wraps": ["tools", "board", "kb"] }
   ],
   "connections": [
-    { "id": "eInput", "from": "idaExport", "to": "orchestrator", "label": "预提取", "variant": "emphasis" },
-    { "id": "eOrchP0a", "from": "orchestrator", "to": "p0String" },
-    { "id": "eOrchP0b", "from": "orchestrator", "to": "p0Api", "label": "Phase 0 fan-out 并行", "labelAt": [420, 200] },
-    { "id": "eOrchP0c", "from": "orchestrator", "to": "p0Export" },
-    { "id": "eP0aExt", "from": "p0String", "to": "extractor" },
-    { "id": "eP0bExt", "from": "p0Api", "to": "extractor" },
-    { "id": "eP0cExt", "from": "p0Export", "to": "extractor" },
-    { "id": "eExtP1a", "from": "extractor", "to": "p1Behavior", "label": "summary ≤1500 tok", "labelAt": [1032, 230] },
-    { "id": "eExtP1b", "from": "extractor", "to": "p1Function" },
-    { "id": "eP1aSched", "from": "p1Behavior", "to": "scheduler", "fromSide": "right", "toSide": "right" },
-    { "id": "eP1bSched", "from": "p1Function", "to": "scheduler", "label": "行为定型 + Top 20", "labelAt": [1165, 366] },
-    { "id": "eSchedHitl", "from": "scheduler", "to": "hitl", "label": "p2_decision", "variant": "security" },
-    { "id": "eHitlP3", "from": "hitl", "to": "p3Func", "label": "CONFIRM / MODIFY", "labelAt": [760, 556] },
-    { "id": "eP3P4", "from": "p3Func", "to": "p4Synthesis", "label": "逐函数结果" },
-    { "id": "eP4Bb", "from": "p4Synthesis", "to": "blackboard", "label": "最终报告落盘", "fromSide": "bottom", "toSide": "bottom" }
+    { "id": "eCliEntry", "from": "cli", "to": "entry", "label": "CLI 参数" },
+    { "id": "eIdaEntry", "from": "idaExport", "to": "entry", "label": "静态导出文本" },
+    { "id": "eEntryGraph", "from": "entry", "to": "graph", "label": "build_graph · ainvoke", "variant": "emphasis", "labelAt": [520, 444] },
+    { "id": "eGraphWorkers", "from": "graph", "to": "workers", "label": "WorkerSpec 编译为图节点", "labelAt": [790, 448] },
+    { "id": "eWorkersLlm", "from": "workers", "to": "llm", "label": "create_agent · ReAct + 结构化输出", "variant": "emphasis", "labelAt": [1075, 440] },
+    { "id": "eWorkersTools", "from": "workers", "to": "tools", "label": "最小工具集 2–4 个", "fromSide": "bottom", "toSide": "top", "labelAt": [990, 500] },
+    { "id": "eToolsBoard", "from": "tools", "to": "board", "label": "读写黑板分片" },
+    { "id": "eWorkersKb", "from": "workers", "to": "kb", "label": "load_arch_guide __active__", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelAt": [740, 495] },
+    { "id": "eGraphHitl", "from": "graph", "to": "hitl", "label": "Phase 2 后阻塞等待", "variant": "security", "fromSide": "top", "toSide": "bottom" },
+    { "id": "eLlmObserv", "from": "llm", "to": "observ", "label": "token usage 回调", "variant": "dashed", "fromSide": "top", "toSide": "bottom" }
   ],
   "cards": [
     {
@@ -49,27 +46,27 @@
       "title": "黑板（Blackboard）数据流",
       "items": [
         "extracts/ — Phase -1 预提取的结构化 JSON 分片",
-        "artifacts/ — Worker 完整输出（p0_*/p1_*/phase3_func_*）",
-        "summary/ — Extractor 摘要，硬约束 ≤1500 tokens",
-        "meta/ — checkpoint 与日志，支持断点续跑"
+        "artifacts/ — Worker 完整输出（p0_* / p1_* / phase3_func_*）",
+        "summary/ — extractor 摘要，硬约束 ≤1500 tokens",
+        "meta/ — active_guides、checkpoint 与日志，支持断点续跑"
       ]
     },
     {
       "dot": "emerald",
       "title": "关键机制",
       "items": [
-        "HITL：Phase 2 后进入 WAITING_FOR_APPROVAL，人工回复 CONFIRM 或 MODIFY",
-        "五段式提示词 + 强制 JSON 输出 + 置信度 high/medium/low 反幻觉约束",
-        "AnalysisTokenReport 按阶段聚合 prompt/candidate/total tokens"
+        "HITL：approval_gate 阻塞，CONFIRM / MODIFY <addr,...> 协议，3 次无效默认放行",
+        "Worker 节点内 create_agent（ReAct）+ response_format，失败回退 parse_json_loose",
+        "SummarizationMiddleware 75% 压缩 + invoke_guarded 128k 上限（头尾截断）"
       ]
     },
     {
       "dot": "violet",
       "title": "技术栈",
       "items": [
-        "Google ADK：Workflow / LlmAgent / FunctionNode / Runner",
-        "Moonshot Kimi-k2.5，经 LiteLlm 走 OpenAI 兼容调用",
-        "Python ≥3.10 · pydantic · uv 锁定依赖"
+        "LangGraph ≥1.0 StateGraph：一条边扇出即并行，多入边扇入",
+        "LangChain ≥1.0 create_agent + init_chat_model（extra_body thinking 关闭）",
+        "DeepSeek deepseek-flash · Python ≥3.10 · pydantic v2 · uv 锁定依赖"
       ]
     }
   ]

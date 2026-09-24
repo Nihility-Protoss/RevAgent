@@ -5,9 +5,9 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "D:\\AI.Agent.Work\\multi_agent_adk-architecture.html",
-    "sha256": "6ce234ace131be4f7d6dbcc1b19371e823fb67d3ba69cd072f5149c430106d6e",
-    "bytes": 646189
+    "path": "D:\\AI.Agent.Work\\multi_agent_adk\\docs\\architecture\\multi_agent_adk-architecture.html",
+    "sha256": "aa2d85b97bd1a073e861d1a06c476ddba3c672c9a7db1b2d9313335b96b304f7",
+    "bytes": 643107
   },
   "state": {
     "detail": "read",

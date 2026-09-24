@@ -3,13 +3,13 @@ from typing import Dict, Any
 
 
 def calculate_entropy(data: bytes) -> Dict[str, Any]:
-    """Calculate Shannon entropy of a byte sequence.
+    """计算字节序列的 Shannon 熵。
 
-    Args:
-        data: Byte sequence to analyze.
+    参数：
+        data: 待分析的字节序列。
 
-    Returns:
-        Dict with status, entropy value (0.0-8.0), and interpretation.
+    返回：
+        包含 status、entropy 值（0.0-8.0）和 interpretation 的字典。
     """
     result = {
         "status": "success",
@@ -24,12 +24,12 @@ def calculate_entropy(data: bytes) -> Dict[str, Any]:
             result["interpretation"] = "empty_data"
             return result
 
-        # Count byte frequencies
+        # 统计字节频率
         frequency = [0] * 256
         for byte in data:
             frequency[byte] += 1
 
-        # Calculate Shannon entropy
+        # 计算 Shannon 熵
         entropy = 0.0
         data_len = len(data)
         for count in frequency:
@@ -40,7 +40,7 @@ def calculate_entropy(data: bytes) -> Dict[str, Any]:
 
         result["entropy"] = round(entropy, 4)
 
-        # Interpretation based on arch_windows_pe.md
+        # 依据 arch_windows_pe.md 的分档给出解释
         if entropy < 4.0:
             result["interpretation"] = "low_entropy: likely unencrypted data or code"
         elif entropy < 6.5:

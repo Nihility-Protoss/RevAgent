@@ -1,4 +1,4 @@
-"""Knowledge base: arch-specific analysis methodology guides."""
+"""知识库：架构专项分析方法论 guide。"""
 from workers.knowledge.base import (
     KNOWLEDGE_REGISTRY,
     KnowledgeMeta,

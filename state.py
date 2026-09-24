@@ -1,4 +1,4 @@
-"""LangGraph state definition: structured worker outputs + AnalysisState TypedDict."""
+"""LangGraph 状态定义：结构化的 worker 输出 + AnalysisState TypedDict。"""
 from operator import add
 from typing import Annotated, Literal, TypedDict
 
@@ -80,7 +80,7 @@ class AnalysisState(TypedDict, total=False):
     behavior_profile: dict
     function_boundary_analysis: dict
     scheduler_decision: dict
-    # HITL
+    # HITL 人工审批节点写入的字段
     phase2_human_decision: str
     human_approved_functions: list[str]
     # Phase 3/4：扇出结果用 reducer 聚合
