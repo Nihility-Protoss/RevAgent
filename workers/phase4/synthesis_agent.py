@@ -5,12 +5,15 @@ SHARD_SYNTHESIS_PROMPT = """你是恶意样本综合分析专家（局部分析�
 输入：
 - Phase 0/1 摘要（固定）
 - Phase 3 函数深度分析摘要（最多5个函数）
+- Phase 3 主题分析摘要（topic_summaries，主题轨跨函数综合结论；可能为空列表）
 
 规则：
 1. 仅基于给定的函数摘要进行分析，不对未提供的函数做假设
 2. 标识这5个函数中的关键可疑行为和 IOC
-3. 输出格式为严格 JSON（最多2层嵌套）
-4. 如果给定函数摘要为空或全部 status=insufficient_data → 输出 status=insufficient_data
+3. 主题摘要可用于印证或补充本 shard 函数的发现（如命令语义、配置解密结论），
+   但不得超出主题摘要已有内容做延伸推断
+4. 输出格式为严格 JSON（最多2层嵌套）
+5. 如果给定函数摘要为空或全部 status=insufficient_data → 输出 status=insufficient_data
 
 输出字段：
 {
@@ -31,6 +34,7 @@ AGGREGATOR_PROMPT = """你是恶意样本综合分析专家（汇总模式）。
 输入：
 - N 个 shard_report
 - Phase 0/1 总体摘要
+- Phase 3 主题分析摘要（topic_summaries，主题轨跨函数综合结论；可能为空列表）
 
 规则：
 1. 仅汇总各 shard 中重复出现或相互印证的发现
@@ -40,6 +44,9 @@ AGGREGATOR_PROMPT = """你是恶意样本综合分析专家（汇总模式）。
 5. 输出格式为严格 JSON（最多2层嵌套）
 6. uncertainties 字段必须非空（至少1项）
 7. 禁止基于"常见恶意软件行为模式"进行推断
+8. topic_conclusions 从主题摘要提炼：每个主题一条"主题词: 一句话结论要点"，
+   最多 10 条；无主题摘要时输出空列表，禁止编造主题结论
+9. 输出整体保持精简（黑板摘要有 ≤1500 tokens 硬限制，超限会被拒绝落盘）
 
 输出字段：
 {
@@ -50,6 +57,7 @@ AGGREGATOR_PROMPT = """你是恶意样本综合分析专家（汇总模式）。
   "key_iocs": {"urls": [], "files": [], "registry": []},
   "analyzed_functions": {"total": 10, "suspicious": 3, "key_functions": []},
   "breakpoint_recommendations": {"P0": [], "P1": [], "P2": []},
+  "topic_conclusions": ["主题词: 一句话结论要点"],
   "uncertainties": ["..."],
   "recommendations": ["..."]
 }

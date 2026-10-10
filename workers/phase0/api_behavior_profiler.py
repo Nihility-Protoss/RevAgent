@@ -10,16 +10,17 @@ API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 - imports_flat: 所有导入的扁平列表
 
 辅助信息（如有）：
-- strings_extract.json 中的可疑字符串（用于交叉验证 API 哈希动态解析）""",
+- strings_extract.json 中的可疑字符串（用于交叉验证 API 哈希动态解析）
+- functions_extract.json 的 total_count（可选交叉：函数总数与导入表规模不成比例是动态解析的强信号）""",
 
     analysis_dimensions="""请从以下维度进行分析：
 1. API 组合分析：识别同时出现的 API 组合，这些组合强烈暗示特定恶意行为：
-   - 进程注入: OpenProcess + VirtualAllocEx + WriteProcessMemory + CreateRemoteThread
-   - 文件加载型: CreateFileW/ReadFile + VirtualAlloc + CreateThread
-   - 持久化: RegOpenKeyEx + RegSetValueEx（Run键）或 OpenSCManager + CreateService
+   - 进程注入: OpenProcess + VirtualAllocEx + WriteProcessMemory + CreateRemoteThread（或 RtlCreateUserThread 变体）
+   - 文件加载型（五段链条）: CreateFile/ReadFile（或资源加载 API）→ VirtualAlloc/GlobalAlloc → 解密循环 → VirtualProtect（写时 RW、执行前改 RX）→ CreateThread/QueueUserAPC/SetThreadContext
+   - 持久化: RegOpenKeyEx + RegSetValueEx（Run键）或 OpenSCManager + CreateService 或 WMI 事件订阅
    - 网络通信: InternetOpen + InternetConnect + HttpSendRequest 或 socket + connect + send
-   - 信息窃取: sqlite3_open、OpenClipboard + GetClipboardData、GetForegroundWindow
-   - 反分析: IsDebuggerPresent + CheckRemoteDebuggerPresent + GetTickCount + EnumWindows
+   - 信息窃取: sqlite3_open、CryptUnprotectData（浏览器凭据解密）、OpenClipboard + GetClipboardData、GetForegroundWindow
+   - 反分析: IsDebuggerPresent + CheckRemoteDebuggerPresent + NtQueryInformationProcess + GetTickCount + EnumWindows
    - UAC绕过: ShellExecuteEx（runas）
    - 凭据窃取: LsaOpenPolicy、SamConnect、CredEnumerate
 
@@ -28,7 +29,7 @@ API_BEHAVIOR_PROFILER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
    - crypt32.dll / advapi32.dll（加密/权限操作）
    - urlmon.dll / winhttp.dll（HTTP下载）
 
-3. API 哈希动态解析迹象：当 IAT "看起来正常"（只有 CRT/STL API）但 strings 中有可疑内容时，标记为高度可疑的 API 哈希动态解析
+3. API 哈希动态解析迹象：导入表极稀疏（典型仅剩 LoadLibrary/GetProcAddress 与 CRT 初始化）而函数总数不成比例时，标记为高度可疑的 API 哈希动态解析；此时行为定性必须回落到字符串证据。PEB 遍历（fs:[0x30]/gs:[0x60]）、ror/rol 0x0D 哈希循环、syscall 直调等汇编级特征超出导入表可见范围，留给 Phase 3 验证
 
 4. 序数导入：通过序号而非名称导入的函数（尤其是 ntdll 中的函数）可能是试图隐藏 API 调用的迹象
 

@@ -18,6 +18,12 @@ Phase 0（快速定性）和 Phase 1（行为定型+函数筛选）已完成。5
    - functions_summary 中的 Top 20 候选函数
 3. 生成简洁的状态报告，写入 output_key="scheduler_decision"
 4. 更新 session.state["analysis_phase"] = "initial_complete"
+5. 根据行为定型结论（behavior_summary 的 primary_type 与各 summary 的关键发现），
+   建议后续深度分析的主题，写入 proposed_topics。主题取值必须来自以下词表：
+   init_config_decrypt / command_dispatcher / persistence / injection_loader /
+   stealer / network_stack / anti_analysis / export_interface
+   只建议有 summary 证据支撑的主题（如定型为 RAT 且有命令分发迹象 → command_dispatcher）；
+   没有可建议的主题时输出空列表，禁止臆造。
 
 【重要约束】
 - 你的输入是各 Worker 的 summary（通过 bb_read_summary 读取），不是完整 artifact
@@ -42,6 +48,7 @@ Phase 0（快速定性）和 Phase 1（行为定型+函数筛选）已完成。5
     "api_key_findings": ["API关键发现"],
     "export_key_findings": ["导出表关键发现"],
     "top_candidates": ["前5个候选函数信息"]
-  }
+  },
+  "proposed_topics": ["建议的深度分析主题，取值限主题词表，可为空列表"]
 }
 """

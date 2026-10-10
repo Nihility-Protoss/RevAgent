@@ -23,6 +23,12 @@ Phase 0 分析摘要（通过 bb_read_summary 读取）：
    - Loader 特征：反射加载、内存执行、DLL 注入
    - Backdoor 特征：命令分发、文件操作、进程控制
 
+   类型 × 加载方式交叉判别（定型与样本形态证据互相印证才可升 high）：
+   - Loader ↔ exe_file_loader：载荷文件名/MZ 头字符串 + 五段链条 API（读取→分配→解密→改保护→转交执行）
+   - Backdoor/RAT ↔ dll_plugin：Install/Start/ServiceMain 类导出 + 命令分发结构（cmd_id 固定偏移/跳转表）
+   - Stealer ↔ 浏览器数据文件字符串（Login Data/Cookies/logins.json）+ CryptUnprotectData/sqlite3
+   - 存在 API 哈希动态解析迹象时，定型证据以字符串为准
+
 2. 命令分发与驻留模式：
    - 固定偏移语义推断：+0x06=cmd_id, +0x07=req_id 等
    - 驻留 vs 一次性命令判定
@@ -42,7 +48,7 @@ Phase 0 分析摘要（通过 bb_read_summary 读取）：
    - 计划任务
 
 5. 反调试对抗：
-   - IsDebuggerPresent 轮询
+   - IsDebuggerPresent / CheckRemoteDebuggerPresent / NtQueryInformationProcess 轮询
    - 线程退出删除日志
    - 自杀回调 (ExitProcess)
 
@@ -54,6 +60,7 @@ Phase 0 分析摘要（通过 bb_read_summary 读取）：
    - P0: VirtualAlloc(RWX)、CreateThread、文件读取返回处
    - P1: 解密函数出口、命令分发器入口
    - P2: sqlite3_open、RegOpenKeyExA、OpenClipboard
+   - 文件加载型样本的 P0/P1 优先锚定三个关键地址：读取点（载荷读入内存）、解密完成点（密文变明文出口）、执行点（转交 CPU）
    
    约束：
    - 如果 address_hint 无法从输入数据（exports / function_index / strings）直接推断 → address_hint 必须为 null
