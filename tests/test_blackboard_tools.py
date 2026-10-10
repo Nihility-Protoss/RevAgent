@@ -5,7 +5,7 @@ import pytest
 
 from tools.blackboard_tools import (
     bb_read_extract, bb_read_summary, bb_write_summary,
-    bb_write_artifact, bb_list_summaries, bb_has_artifact,
+    bb_write_artifact, bb_list_artifacts, bb_list_summaries, bb_has_artifact,
     bb_checkpoint, bb_load_checkpoint, bb_log_event,
     board_base_dir,
 )
@@ -72,6 +72,37 @@ def test_bb_has_artifact():
             assert not bb_has_artifact("p0_string", "test_proj")
             bb_write_artifact("p0_string", {"result": "test"}, "test_proj")
             assert bb_has_artifact("p0_string", "test_proj")
+        finally:
+            os.chdir(orig_dir)
+
+
+def test_bb_list_artifacts():
+    """bb_list_artifacts 按前缀列出名称（不含 latest/ 索引、不返回内容）。"""
+    orig_dir = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _make_board("test_proj", tmpdir)
+        os.chdir(tmpdir)
+        try:
+            bb_write_artifact("p0_strings_20261009_010000", {"a": 1}, "test_proj")
+            bb_write_artifact("p0_api_20261009_010100", {"b": 2}, "test_proj")
+            bb_write_artifact("phase3_func_0x401000", {"c": 3}, "test_proj")
+
+            result = bb_list_artifacts("p0_", "test_proj")
+            assert result["status"] == "success"
+            assert result["count"] == 2
+            assert result["artifacts"] == [
+                "p0_api_20261009_010100", "p0_strings_20261009_010000",
+            ]
+            # 前缀过滤生效，latest/ 索引目录不会混入
+            assert bb_list_artifacts("phase3_func_", "test_proj")["artifacts"] == [
+                "phase3_func_0x401000"
+            ]
+            assert bb_list_artifacts("nope_", "test_proj")["count"] == 0
+
+            # artifacts 目录不存在时返回 error 而非抛异常
+            missing = bb_list_artifacts("p0_", "ghost_proj")
+            assert missing["status"] == "error"
+            assert missing["reason"] == "artifacts_dir_not_found"
         finally:
             os.chdir(orig_dir)
 

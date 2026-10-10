@@ -3,7 +3,8 @@ from workers.shared_prompts import FIVE_SECTION_TEMPLATE, JSON_OUTPUT_RULE, CONF
 STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意代码取证分析专家，专注于从 Windows PE 样本的字符串表中提取关键取证信息。
 你的任务是通过分析 strings.txt 中的内容，识别数据文件名、PDB路径、密钥字符串、URL、注册表路径、互斥体名等关键线索。
-核心原则：对于 Windows PE 样本，strings.txt 的优先级高于 imports.txt（API 哈希可绕过 IAT，但字符串无法隐藏）。""",
+核心原则：对于 Windows PE 样本，strings.txt 的优先级高于 imports.txt（API 哈希可绕过 IAT，但字符串无法隐藏）。
+字符串定性遵循固定顺序：路径与文件名 → 注册表键 → URL/IP/域名 → 命令行片段（cmd /c、powershell、-enc）→ 互斥体/服务名。""",
 
     input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化字符串数据（strings_extract.json）。
 数据已按类别分组：
@@ -19,6 +20,8 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
     analysis_dimensions="""请从以下维度进行分析：
 1. 数据文件名分析：列出所有疑似数据文件名，评估是否为文件加载型样本的关键证据
+   - 文件加载型标志：第二个 PE/载荷文件名、MZ 头魔数字符串、"This program cannot be run in DOS mode"
+   - 浏览器凭据/数据文件（Login Data、Cookies、Web Data、logins.json）→ 指向 Stealer 窃取能力
 2. PDB 路径分析：提取项目名、编译环境信息，评估暴露程度
 3. 密钥/配置字符串：识别长度>32的随机ASCII、无自然语言结构的字符串
 4. 压缩库标识：识别 deflate/zlib/inflate 等版本字符串
@@ -26,14 +29,19 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 6. URL/域名分析：提取所有网络通信目标，评估 C2 通信线索
 7. 注册表路径分析：识别持久化相关的注册表操作目标
 8. 互斥体名分析：识别进程互斥、实例控制相关的名称
-9. 命令行参数分析：识别脚本执行、编码命令等迹象
+9. 命令行参数分析：识别脚本执行、编码命令等迹象（cmd /c、powershell -enc、schtasks 计划任务创建）
 10. 异常长字符串：标记长度异常（>200字符）的字符串，可能包含编码载荷
 11. **架构识别（arch_detection）**：判定样本的编译语言、编译器、加壳/保护方式与样本形态，为后续阶段的知识注入提供路由依据。识别要点：
     - Rust 证据：`/rustc/<hash>/` 编译器路径、`.rs` 源码路径、`core::panicking::panic`、`unwrap failed`。
     - Go 证据：`go.buildid`、`go1.<ver>` 运行时版本、`main.`/`github.com/` 包路径前缀。
     - C/C++ 证据：MSVC 的 `??0`/`??1` 修饰名、`__security_check_cookie`、PDB 路径；GCC 的 `.gcc_except_table`。
     - 加壳/保护：UPX 段名（`UPX0`/`UPX1`）与字符串、`Themida`、`VMProtect`、Enigma 等；区名正常但导入表极稀疏也可能指示自定义壳。
-    - 样本形态：`exe_file_loader`（出现第二个 PE/载荷文件名、MZ 头字符串、无引用的大字节数组）；`dll_plugin`（导出 Install/Start/ServiceMain 类导出）；其余为 `plain_exe`。
+    - 样本形态：`exe_file_loader`（出现第二个 PE/载荷文件名、MZ 头或 "This program cannot be run in DOS mode" 字符串、无引用的大字节数组）；`dll_plugin`（字符串中出现 Install/Start/ServiceMain 类导出名或插件标识——导出表不在本 Worker 输入中，仅凭字符串证据时该项置信度不超过 medium）；其余为 `plain_exe`。
+    - 框架/引擎识别（code_frameworks，多选，无证据留空列表）：
+      - `vm_protected`（VM 保护/重度混淆）：VMProtect/Themida 段名或字符串、大量体积异常的无符号大函数迹象（字符串层面证据偏弱，仅作提示，最终由函数级证据确认）。
+      - `lua_scripted`（Lua 脚本引擎）：`luaL_newstate`、`luaL_loadbuffer`、`lua_pcall`、`lua_pushcfunction`、`.luac`/`.lua` 文件名、LuaJIT 版本字符串。
+      - `encrypted_sqlite`（嵌入式加密数据库）：`sqlite3_open`、`sqlite3_prepare_v2`、`sqlite3_column_blob` 等 SQLite API 字符串，`.db`/`.dat` 数据文件路径。
+      - `yara_embedded`（内嵌 YARA 引擎）：`yr_compiler_create`、`yr_rules_scan_mem`、`libyara`，或 `rule`/ `strings:`/`condition:` 明文规则片段。
     - 每条判定必须附 strings 中的原始证据行；证据不足时填 `unknown`，置信度相应降级，禁止猜测。""",
 
     output_format=JSON_OUTPUT_RULE.format(json_schema="""{
@@ -80,6 +88,7 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     "compiler_hints": ["msvc | gcc | mingw | ..."],
     "packer_protector": ["upx | vmp | themida | none | unknown | ..."],
     "sample_form": "exe_file_loader | dll_plugin | plain_exe | unknown",
+    "code_frameworks": ["vm_protected | lua_scripted | encrypted_sqlite | yara_embedded（可多选，无证据留空列表）"],
     "confidence": "high | medium | low",
     "evidence": ["<每条判定对应的原始字符串证据>"]
   },

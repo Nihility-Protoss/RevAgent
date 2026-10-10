@@ -29,12 +29,13 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
 4. 加壳检查：节名 UPX0/UPX1、入口点异常、高熵等迹象
 
-5. 导出函数命名分析：检查导出函数名称是否暗示恶意功能（Install、ServiceMain、DllInjection 等）
+5. 导出函数命名分析：检查导出函数名称是否暗示恶意功能（Install、Start、ServiceMain、DllInjection 等）；此类命名是 DLL 插件型的标志，命中时后续阶段应优先分析导出函数本体（插件入口）
 
 6. 命令接口推断：如果是 DLL 插件型，推断 ordinal 命令分发器接口：
    - ordinal_1 可能为初始化函数（dll_initialize）
    - ordinal_2+ 可能为命令处理函数
    - 分析回调参数语义（rcx=主回调地址, rdx=字符串处理回调等）
+   - 命令分发的典型实现为"比较指令常量 + 跳转表"（cmp reg, 常量; jmp [reg*N+table]），常量值即 cmd_id，供 cmd_offset_semantics 判读参考
 
 若分析过程中发现与编译语言、加壳/保护方式或样本形态（EXE 文件加载型 / DLL 插件型）相关的证据（如异常稀疏的导入表、Install/ServiceMain 类导出、保护壳特征 API），请在结论的相应字段或 notes 中注明并附证据；无需输出独立结构。""",
 

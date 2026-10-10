@@ -122,3 +122,83 @@ def test_match_guides_generic_applies_to(monkeypatch):
 
     assert "python_guide" in match_guides({"language": "python", "confidence": "high"})
     assert "python_guide" not in match_guides({"language": "rust", "confidence": "high"})
+
+
+# === C1：框架/引擎知识指南扩容（vm_protected / lua / encrypted_sqlite / yara）===
+
+def test_registry_contains_framework_guides():
+    """4 份框架/引擎指南注册一致：name、priority、applies_to、token 预算。"""
+    from workers.knowledge import KNOWLEDGE_REGISTRY
+    expected = {
+        "vm_protected": ["code_frameworks:vm_protected", "packer_protector:vmp"],
+        "lua_scripted_agent": ["code_frameworks:lua_scripted"],
+        "encrypted_database": ["code_frameworks:encrypted_sqlite"],
+        "yara_embedded": ["code_frameworks:yara_embedded"],
+    }
+    for name, tags in expected.items():
+        assert name in KNOWLEDGE_REGISTRY, f"缺少知识文件 {name}"
+        meta = KNOWLEDGE_REGISTRY[name]
+        assert meta.priority == 100
+        assert meta.applies_to == tags
+        assert meta.max_tokens == 1200
+        assert meta.path.exists()
+
+
+def test_match_guides_framework_routing():
+    """code_frameworks 列表字段按成员匹配路由到对应框架指南。"""
+    from workers.knowledge import match_guides
+    guides = match_guides({
+        "language": "c_cpp", "confidence": "high",
+        "code_frameworks": ["lua_scripted", "encrypted_sqlite"],
+    })
+    assert guides[0] == "windows_pe"  # 基线永远在前
+    assert "cpp" in guides
+    assert "lua_scripted_agent" in guides
+    assert "encrypted_database" in guides
+    assert "yara_embedded" not in guides
+    assert "vm_protected" not in guides
+
+
+def test_match_guides_packer_protector_list_routing():
+    """packer_protector 列表中的 vmp 成员命中 vm_protected 指南的第二个标签。"""
+    from workers.knowledge import match_guides
+    guides = match_guides({"confidence": "medium", "packer_protector": ["vmp", "unknown"]})
+    assert "vm_protected" in guides
+    # packer_protector 不含 vmp 时不应命中
+    assert "vm_protected" not in match_guides({"confidence": "high", "packer_protector": ["upx"]})
+
+
+def test_match_guides_framework_low_confidence_fallback():
+    """confidence=low 时框架指南不生效，只回退基线。"""
+    from workers.knowledge import match_guides
+    assert match_guides({"confidence": "low", "code_frameworks": ["yara_embedded"]}) == ["windows_pe"]
+
+
+def test_arch_detection_code_frameworks_field():
+    """ArchDetection 新增 code_frameworks：可选（缺省空列表，向后兼容），词表常量齐备。"""
+    from state import ARCH_CODE_FRAMEWORK_VOCABULARY, ArchDetection, StringAnalysis
+    # 旧数据（无 code_frameworks 键）解析不报错，默认空列表
+    legacy = ArchDetection(language="rust", confidence="high")
+    assert legacy.code_frameworks == []
+    # 新值可写入
+    det = ArchDetection(code_frameworks=["vm_protected", "yara_embedded"])
+    assert det.code_frameworks == ["vm_protected", "yara_embedded"]
+    # 词表常量与知识库路由标签一一对应
+    assert set(ARCH_CODE_FRAMEWORK_VOCABULARY) == {
+        "vm_protected", "lua_scripted", "encrypted_sqlite", "yara_embedded",
+    }
+    # StringAnalysis 内嵌的 arch_detection 同样兼容
+    sa = StringAnalysis(arch_detection={"language": "golang"})
+    assert sa.arch_detection.code_frameworks == []
+
+
+def test_string_analyst_prompt_framework_vocabulary():
+    """string_artifact_analyst 的 arch_detection 维度包含各框架的字符串特征速查。"""
+    from workers.phase0.string_artifact_analyst import STRING_ARTIFACT_ANALYST_INSTRUCTION
+    text = STRING_ARTIFACT_ANALYST_INSTRUCTION
+    for keyword in (
+        "code_frameworks", "vm_protected", "lua_scripted", "encrypted_sqlite", "yara_embedded",
+        "luaL_newstate", "luaL_loadbuffer", "sqlite3_open", "sqlite3_prepare_v2",
+        "yr_compiler_create", "yr_rules_scan_mem", "libyara",
+    ):
+        assert keyword in text, f"prompt 缺少架构识别关键词 {keyword}"
