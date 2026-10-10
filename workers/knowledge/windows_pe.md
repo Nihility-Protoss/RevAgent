@@ -23,13 +23,14 @@ max_tokens: 1200
 - 哈希循环：`ror/rol 0x0D` 或固定 XOR 常量的紧凑循环，紧跟 `call rax`/`call reg` 间接调用。
 - 系统调用直调：导入表为空但存在 `mov eax, <syscall号>; syscall/sysenter` 序列。
 出现以上特征时，报告"API 哈希动态解析，置信度 high"，行为定性必须回落到字符串证据。
+分层判据：Phase 0 仅有导入表时，只能凭"导入表极稀疏（典型仅剩 LoadLibrary/GetProcAddress 与 CRT）+ 函数总数不成比例 + 字符串可疑"给出 medium 及以下结论；上述汇编级特征需 Phase 3 反编译命中后才升 high。
 
 ## 文件加载型核心逻辑定位（纯静态近似）
 无法使用 xrefs_to 时，用函数索引 + 字符串证据近似：
 1. 在 strings 中定位 shellcode/载荷文件名、MZ 头魔数、`This program cannot be run in DOS mode`。
 2. 在 function_index 中筛选引用这些字符串所在地址的函数（IDA 导出含 xrefs 时直接用）。
 3. 候选函数按"五段式行为链条"核对（见 file_loader_triage 指南）。
-DLL 插件型样本（导出表含 Install/Start/ServiceMain 类导出）优先分析导出函数本体。
+对照：DLL 插件型样本（导出表含 Install/Start/ServiceMain 类导出）无需上述近似定位，优先分析导出函数本体（插件入口）。
 
 ## 命令分发与配置解析
 - 命令分发结构：比较指令常量后立即跳转表（`cmp reg, 0x06; ja default; jmp [reg*8+table]`），常量值即 cmd_id，逐个还原语义。
