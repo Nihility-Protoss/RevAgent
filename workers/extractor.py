@@ -90,6 +90,23 @@ SUMMARY_SCHEMAS = {
   "confidence": "high",
   "related_to": ["0x180002500"]
 }""",
+    "verification": """{
+  "worker": "verification_agent",
+  "key_findings": ["已核对结论的要点"],
+  "verified_count": 3,
+  "disputed_count": 1,
+  "unverifiable_count": 2,
+  "disputed_findings": [{"finding": "被反驳的发现", "reason": "具体矛盾点"}],
+  "confidence": "medium"
+}""",
+    "topic": """{
+  "worker": "topic_analyzer",
+  "topic": "command_dispatcher",
+  "summary": "主题总体结论（一段话）",
+  "key_findings": ["逐命令/逐机制条目的压缩表述，最多10条"],
+  "confidence": "medium",
+  "unresolved_count": 2
+}""",
 }
 
 

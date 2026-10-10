@@ -128,7 +128,7 @@ def _load_active(project_name: str) -> dict:
 def match_guides(arch_detection: dict) -> list[str]:
     """依据 applies_to 标签，把 arch_detection dict 映射为生效的 guide 名称列表。
 
-    基线 guide（applies_to 含 "baseline"，例如 windows_pe）始终包含。其他 guide 声明 "key:value" 形式的标签，其中 key 是 arch_detection 的字段（例如 language、sample_form）；当该字段与 value 匹配（不区分大小写）时该 guide 被包含。当 confidence 为 low（或未设置）时，只有基线 guide 生效。
+    基线 guide（applies_to 含 "baseline"，例如 windows_pe）始终包含。其他 guide 声明 "key:value" 形式的标签，其中 key 是 arch_detection 的字段（例如 language、sample_form、code_frameworks）；当该字段与 value 匹配（不区分大小写）时该 guide 被包含——字段值为列表时（code_frameworks / packer_protector）按成员匹配。当 confidence 为 low（或未设置）时，只有基线 guide 生效。
     """
     arch = arch_detection or {}
     confidence = str(arch.get("confidence") or "low").lower()
@@ -145,7 +145,15 @@ def match_guides(arch_detection: dict) -> list[str]:
             key, sep, value = tag.partition(":")
             if not sep:
                 continue
-            arch_value = str(arch.get(key) or "").lower()
+            raw = arch.get(key)
+            if isinstance(raw, list):
+                # 列表字段（code_frameworks / packer_protector 等）：成员匹配
+                # （C1 扩容：arch_detection 词表扩展为多值字段）
+                if any(str(item).strip().lower() == value.strip().lower() for item in raw):
+                    names.append(name)
+                    break
+                continue
+            arch_value = str(raw or "").lower()
             if arch_value and arch_value == value.strip().lower():
                 names.append(name)
                 break
