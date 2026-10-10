@@ -3,10 +3,16 @@
 # 注意：API_KEY 等机密请放 .env，不要写入本文件
 
 llm:
-  model: deepseek-flash                # 环境变量回退: MODEL
-  base_url: https://api.deepseek.com/v1  # 环境变量回退: BASE_URL
+  model: kimi-for-coding               # 环境变量回退: MODEL
+  base_url: https://api.kimi.com/coding/v1  # 环境变量回退: BASE_URL
   thinking: disabled                   # enabled/disabled，环境变量回退: THINKING
+  temperature: 0.6                     # 采样温度（Kimi Code 模型仅允许 0.6），环境变量回退: TEMPERATURE
   max_context_tokens: 128000           # 所有 agent 单次调用输入上限，环境变量回退: MAX_CONTEXT_TOKENS
+  # 模型分层（B1）：轻任务（Phase 0 triage / scheduler / 验证 / extractor）可用小模型降本。
+  # 缺省（null）= 与主模型相同，零行为变化；light_api_key 属机密，建议用环境变量 LIGHT_API_KEY。
+  light_model: null                    # 轻任务模型名（缺省用 llm.model），环境变量回退: LIGHT_MODEL
+  light_base_url: null                 # 轻任务端点（缺省用 llm.base_url），环境变量回退: LIGHT_BASE_URL
+  light_api_key: null                  # 轻任务 key（缺省用 API_KEY），环境变量回退: LIGHT_API_KEY
 
 paths:
   input_root: data/input               # *_export_for_ai 导出目录存放处，环境变量回退: INPUT_ROOT
@@ -16,3 +22,17 @@ analysis:
   project_name: module                 # CLI -p 可覆盖，环境变量回退: PROJECT_NAME
   input_name: null                     # data/input/ 下的导出目录名（可省略 _export_for_ai 后缀），CLI -i 可覆盖
   resume: false                        # CLI -r 可覆盖
+  phase3_max_concurrency: 4            # Phase 3 Send 扇出后同时进行的函数分析 LLM 调用上限，环境变量回退: PHASE3_MAX_CONCURRENCY
+  phase3_top_n: 20                     # Phase 3 候选函数数量上限，环境变量回退: PHASE3_TOP_N
+  lib_xref_threshold: 50               # 库函数护栏：xrefs 超过该值的疑似 CRT/库函数排除，环境变量回退: LIB_XREF_THRESHOLD
+  lib_tail_ratio: 0.45                 # 库函数护栏：样本函数地址范围尾部该比例起算高地址区间，环境变量回退: LIB_TAIL_RATIO
+  lib_size_max: 512                    # 库函数护栏：size 上限（0=不启用 size 条件；size 未知不阻断），环境变量回退: LIB_SIZE_MAX
+  token_budget: null                   # 单次分析总 token 预算（null=不启用）：超限 interrupt 挂起等人工放行，环境变量回退: TOKEN_BUDGET
+  # C2 用户分析优先级：逗号分隔原文（如 "驻留,持久化"），CLI --focus/--exclude 可覆盖；
+  # focus 维度优先详细展开；exclude 维度不深入静态过程，只保留动调提取方案
+  focus: null                          # 用户重点关注的分析领域，环境变量回退: FOCUS
+  exclude: null                        # 用户指示不深入分析的领域，环境变量回退: EXCLUDE
+
+webui:
+  host: 127.0.0.1                      # Web UI 监听地址（仅本机），环境变量回退: WEBUI_HOST
+  port: 8300                           # Web UI 监听端口，环境变量回退: WEBUI_PORT

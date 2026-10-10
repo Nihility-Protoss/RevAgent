@@ -176,6 +176,25 @@ def bb_has_artifact(artifact_name: str, project_name: str) -> bool:
     return os.path.exists(path)
 
 
+def bb_list_artifacts(prefix: str, project_name: str) -> dict:
+    """列出 artifacts/ 下前缀匹配的 artifact 名称（不含 latest/ 索引，不返回内容）。
+
+    p0/p1 artifact 文件名带时间戳无法猜测，调用方应先经本工具拿到名称列表，
+    再用 bb_read_artifact 逐个读取原文。
+    """
+    artifacts_dir = board_path(project_name, "artifacts")
+    if not os.path.exists(artifacts_dir):
+        return {"status": "error", "reason": "artifacts_dir_not_found", "path": artifacts_dir}
+    names = []
+    for fname in sorted(os.listdir(artifacts_dir)):
+        if not fname.endswith(".json"):
+            continue
+        name = fname[: -len(".json")]
+        if name.startswith(prefix):
+            names.append(name)
+    return {"status": "success", "artifacts": names, "count": len(names)}
+
+
 # --- Checkpoint / Resume（检查点与断点续跑）---
 
 def bb_checkpoint(phase: str, project_name: str) -> dict:
@@ -246,6 +265,27 @@ def bb_log_event(event_type: str, details: dict, project_name: str) -> dict:
         return {"status": "error", "reason": "write_error", "error": str(e)}
 
 
+def _find_ci(dir_path: str, filename: str) -> Optional[str]:
+    """大小写不敏感地在目录中查找文件，命中返回完整路径，否则返回 None。
+
+    function_index 中的地址为小写（0x180013d80），而真实导出文件名常为大写 hex
+    （180013D80.asm）；Windows 文件系统不敏感，Linux 敏感，这里统一兼容。
+    """
+    direct = os.path.join(dir_path, filename)
+    if os.path.exists(direct):
+        return direct
+    if not os.path.isdir(dir_path):
+        return None
+    target = filename.lower()
+    try:
+        for name in os.listdir(dir_path):
+            if name.lower() == target:
+                return os.path.join(dir_path, name)
+    except OSError:
+        return None
+    return None
+
+
 def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) -> dict:
     """为单个函数加载反编译/反汇编片段。
 
@@ -256,6 +296,8 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
 
     返回：
         包含 status、addr、name、decompile_snippet、disassembly_snippet、xrefs 的字典。
+        decompile_failed=True 表示该函数反编译失败（无伪代码，只剩反汇编可走
+        fallback 分析路径；数据行为与现状一致，仅显式标注，供 prompt 路由切换）。
     """
     result = {
         "status": "success",
@@ -264,6 +306,7 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
         "name": None,
         "decompile_snippet": None,
         "disassembly_snippet": None,
+        "decompile_failed": False,
         "xrefs_in": [],
         "xrefs_out": [],
         "size": 0,
@@ -271,9 +314,9 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
 
     addr_clean = func_addr.replace("0x", "").replace("0X", "")
 
-    # 读取反编译产物
-    decompile_path = os.path.join(export_dir, "decompile", f"{addr_clean}.c")
-    if os.path.exists(decompile_path):
+    # 读取反编译产物（文件名大小写兼容）
+    decompile_path = _find_ci(os.path.join(export_dir, "decompile"), f"{addr_clean}.c")
+    if decompile_path:
         try:
             with open(decompile_path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()[:max_lines]
@@ -281,9 +324,9 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
         except Exception as e:
             result["error"] = f"decompile_read_error: {e}"
 
-    # 读取反汇编产物
-    disasm_path = os.path.join(export_dir, "disassembly", f"{addr_clean}.asm")
-    if os.path.exists(disasm_path):
+    # 读取反汇编产物（文件名大小写兼容）
+    disasm_path = _find_ci(os.path.join(export_dir, "disassembly"), f"{addr_clean}.asm")
+    if disasm_path:
         try:
             with open(disasm_path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()[:max_lines]
@@ -293,6 +336,10 @@ def load_function_data(func_addr: str, export_dir: str, max_lines: int = 200) ->
                 result["error"] += f"; disassembly_read_error: {e}"
             else:
                 result["error"] = f"disassembly_read_error: {e}"
+
+    # 反编译失败标注：伪代码缺失即视为失败（与 function_index 的
+    # Type: disassembly-fallback 语义一致），反汇编存在与否不影响标注
+    result["decompile_failed"] = result["decompile_snippet"] is None
 
     return result
 
