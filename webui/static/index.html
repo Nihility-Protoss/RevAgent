@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RevAgent 审查面板</title>
+<!-- Markdown 渲染选用 marked.js（CDN）。CDN 加载失败时自动回退为 <pre> 纯文本展示。 -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; --accent: #0969da; --danger: #cf222e; --ok: #1a7f37; }
+  * { box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; margin: 0; background: var(--bg); color: #1f2328; }
+  header { background: #0b3050; color: #fff; padding: 12px 20px; }
+  header h1 { font-size: 18px; margin: 0; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px 20px 60px; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  label { font-size: 13px; color: #57606a; display: block; margin-bottom: 4px; }
+  input[type=text] { width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+  button { padding: 7px 16px; border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; font-size: 14px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.confirm { background: var(--ok); border-color: var(--ok); color: #fff; }
+  button.modify { background: #bf8700; border-color: #bf8700; color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 200px; }
+  .status-badge { display: inline-block; padding: 3px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+  .st-running { background: #ddf4ff; color: #0969da; }
+  .st-awaiting_approval { background: #fff8c5; color: #7d4e00; }
+  .st-completed { background: #dafbe1; color: var(--ok); }
+  .st-failed, .st-interrupted { background: #ffebe9; color: var(--danger); }
+  .st-not_found { background: #f6f8fa; color: #57606a; }
+  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+  th { background: var(--bg); }
+  tr:hover td { background: #f0f6fc; }
+  .hidden { display: none !important; }
+  .hint { font-size: 12px; color: #57606a; }
+  .error-text { color: var(--danger); font-size: 13px; white-space: pre-wrap; }
+  #report-body { line-height: 1.6; }
+  #report-body table { font-size: 13px; }
+  .kv { display: grid; grid-template-columns: 160px 1fr; gap: 4px 12px; font-size: 14px; }
+  .kv dt { color: #57606a; } .kv dd { margin: 0; }
+  /* 页签（人工审批 / 沟通记录） */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .tab { border: none; background: none; padding: 8px 14px; font-size: 14px; border-bottom: 2px solid transparent; border-radius: 0; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  /* USER.md 沟通记录 */
+  .usermd-q { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
+  .usermd-q-title { font-weight: 600; margin-bottom: 6px; }
+  .usermd-q-body { margin: 6px 0; }
+  .usermd-a pre { background: #dafbe1; }
+  .usermd-reply { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; margin: 6px 0; font-family: inherit; }
+</style>
+</head>
+<body>
+<header><h1>RevAgent 恶意样本分析 · HITL 审查面板</h1></header>
+<main>
+  <!-- 启动区 -->
+  <div class="card">
+    <h2>启动分析</h2>
+    <div class="row">
+      <div>
+        <label>项目名（data/output/ 子目录名，必填）</label>
+        <input type="text" id="project-name" placeholder="如 sample_001">
+      </div>
+      <div>
+        <label>输入目录名（可选，可省略 _export_for_ai 后缀）</label>
+        <input type="text" id="input-name" placeholder="如 module.upx">
+      </div>
+      <div style="flex:0 0 120px">
+        <label>&nbsp;</label>
+        <label style="color:#1f2328"><input type="checkbox" id="resume"> 断点续跑</label>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="primary" id="btn-start">开始分析</button>
+      <button id="btn-attach">查询/接管现有项目</button>
+      <span class="hint" id="start-hint"></span>
+    </div>
+  </div>
+
+  <!-- 状态区 -->
+  <div class="card hidden" id="status-card">
+    <h2>运行状态</h2>
+    <p>项目 <b id="status-project"></b>：<span class="status-badge" id="status-badge"></span>
+       <span class="hint" id="status-extra"></span></p>
+    <p class="error-text hidden" id="status-error"></p>
+  </div>
+
+  <!-- 人工协作面板：审批门 + USER.md 沟通记录（页签切换） -->
+  <div class="card hidden" id="review-card">
+    <div class="tabs">
+      <button class="tab active" id="tab-review" type="button">人工审批</button>
+      <button class="tab" id="tab-usermd" type="button">沟通记录</button>
+    </div>
+    <div id="pane-review">
+      <h2 style="border:none;margin-bottom:8px" id="review-title">人工审批门（Phase 2 → Phase 3）</h2>
+      <dl class="kv" id="review-summary"></dl>
+      <h3 style="font-size:14px">审批门消息原文</h3>
+      <pre id="review-message"></pre>
+      <p class="error-text hidden" id="review-error"></p>
+      <h3 style="font-size:14px" id="candidate-caption">候选函数（勾选后点 MODIFY 可指定分析范围；不勾选任何项时 MODIFY 不可用）</h3>
+      <table id="candidate-table">
+        <thead><tr>
+          <th><input type="checkbox" id="check-all" checked></th>
+          <th>地址</th><th>名称</th><th>大小</th><th>xrefs</th><th>优先级</th><th>推荐理由</th>
+        </tr></thead>
+        <tbody id="candidate-rows"></tbody>
+      </table>
+      <div style="margin-top:12px">
+        <button class="confirm" id="btn-confirm">CONFIRM（使用推荐候选）</button>
+        <button class="modify" id="btn-modify">MODIFY（仅分析勾选项）</button>
+        <button class="confirm hidden" id="btn-budget-continue">继续（放行一个 token 预算步长）</button>
+        <span class="hint" id="decision-hint"></span>
+      </div>
+    </div>
+    <div id="pane-usermd" class="hidden">
+      <p class="hint">USER.md 异步沟通通道：Agent 运行中把疑惑/矛盾写入此处（不阻塞分析）；
+        你的回复只落盘到 docs/{项目名}/USER.md，不影响图运行，Agent 在下一波主题分析前读取。</p>
+      <div id="usermd-focus" class="hidden"></div>
+      <div id="usermd-questions"></div>
+      <button id="btn-usermd-refresh" type="button">刷新沟通记录</button>
+      <span class="hint" id="usermd-hint"></span>
+    </div>
+  </div>
+
+  <!-- 报告区 -->
+  <div class="card hidden" id="report-card">
+    <h2>最终报告</h2>
+    <div id="report-body"></div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let pollTimer = null;
+let currentProject = null;
+let activeTab = "review";
+let lastStatus = null;
+
+const STATUS_TEXT = {
+  running: "运行中", awaiting_approval: "等待人工审批", completed: "已完成",
+  failed: "失败", not_found: "未找到", interrupted: "中途退出",
+};
+
+async function api(path, opts) {
+  const resp = await fetch(path, opts);
+  let body = null;
+  try { body = await resp.json(); } catch (e) { /* 非 JSON 响应 */ }
+  if (!resp.ok) {
+    const detail = body && body.detail ? body.detail : ("HTTP " + resp.status);
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return body;
+}
+
+function show(el, on) { el.classList.toggle("hidden", !on); }
+
+function setStatus(data) {
+  show($("status-card"), true);
+  $("status-project").textContent = currentProject || "";
+  const badge = $("status-badge");
+  badge.textContent = STATUS_TEXT[data.status] || data.status;
+  badge.className = "status-badge st-" + data.status;
+  const extra = [];
+  if (data.phase2_human_decision) extra.push("人工决定: " + data.phase2_human_decision);
+  if (data.report_md_path) extra.push("报告: " + data.report_md_path);
+  $("status-extra").textContent = extra.join("　");
+  show($("status-error"), !!data.error);
+  $("status-error").textContent = data.error || "";
+}
+
+async function startAnalysis() {
+  const project = $("project-name").value.trim();
+  if (!project) { $("start-hint").textContent = "请填写项目名"; return; }
+  $("start-hint").textContent = "启动中…";
+  try {
+    await api("/api/analysis/start", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        project_name: project,
+        input_name: $("input-name").value.trim() || null,
+        resume: $("resume").checked,
+      }),
+    });
+    $("start-hint").textContent = "";
+    attachProject(project);
+  } catch (e) {
+    $("start-hint").textContent = e.message;
+  }
+}
+
+function attachProject(project) {
+  currentProject = project;
+  lastStatus = null;
+  show($("review-card"), true);  // 人工协作卡片常驻（审批 / 沟通记录页签）
+  loadUsermd();
+  if (pollTimer) clearInterval(pollTimer);
+  poll();  // 立即刷一次
+  pollTimer = setInterval(poll, 2000);
+}
+
+async function poll() {
+  if (!currentProject) return;
+  try {
+    const st = await api("/api/analysis/" + encodeURIComponent(currentProject) + "/status");
+    setStatus(st);
+    if (st.status === "awaiting_approval") {
+      await loadReview();
+      // 刚到达审批门时自动切到审批页签（之后不强制切换，避免打断用户输入）
+      if (lastStatus !== "awaiting_approval") showTab("review");
+    }
+    if (st.status === "completed") {
+      await loadReport();
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+    if (st.status === "failed" || st.status === "interrupted" || st.status === "not_found") {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+    // 沟通记录页签可见时每轮轮询刷新（草稿在重渲染时保留）
+    if (activeTab === "usermd") await loadUsermd();
+    lastStatus = st.status;
+  } catch (e) {
+    $("status-extra").textContent = "状态查询失败: " + e.message;
+  }
+}
+
+async function loadReview() {
+  const data = await api("/api/analysis/" + encodeURIComponent(currentProject) + "/review");
+  const r = data.review || {};
+  const bp = (r.behavior_profile && r.behavior_profile.behavior_profile) || {};
+  $("review-summary").innerHTML = "";
+  const kvs = [
+    ["行为定型", (bp.primary_type || "Unknown") + "（置信度: " + (bp.confidence || "low") + "）"],
+    ["高风险字符串指标", r.high_risk_strings],
+    ["高风险 API 指标", r.high_risk_apis],
+    ["候选函数", (r.candidates || []).length + " / " + (r.total_functions || 0)],
+  ];
+  for (const [k, v] of kvs) {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    $("review-summary").append(dt, dd);
+  }
+  $("review-message").textContent = data.message || "(无审批消息)";
+  show($("review-error"), !!data.error);
+  $("review-error").textContent = data.error || "";
+
+  const tbody = $("candidate-rows");
+  tbody.innerHTML = "";
+  for (const c of (r.candidates || [])) {
+    const tr = document.createElement("tr");
+    // 默认勾选规则与 CONFIRM 语义一致：analysis_priority >= 7 的推荐候选
+    const checked = (c.analysis_priority || 0) >= 7 ? "checked" : "";
+    tr.innerHTML =
+      '<td><input type="checkbox" class="cand-check" value="' + esc(c.func_addr) + '" ' + checked + '></td>' +
+      "<td>" + esc(c.func_addr) + "</td><td>" + esc(c.func_name) + "</td>" +
+      "<td>" + (c.size ?? "") + "</td><td>" + (c.xrefs ?? "") + "</td>" +
+      "<td>" + (c.analysis_priority ?? "") + "</td><td>" + esc(c.priority_reason || "") + "</td>";
+    tbody.appendChild(tr);
+  }
+  // token 预算闸门挂起（kind=token_budget）：只留"继续"按钮，隐藏审批按钮与候选表
+  const isBudget = data.kind === "token_budget";
+  $("review-title").textContent = isBudget ? "Token 预算闸门（等待人工放行）" : "人工审批门（Phase 2 → Phase 3）";
+  show($("btn-budget-continue"), isBudget);
+  show($("btn-confirm"), !isBudget);
+  show($("btn-modify"), !isBudget);
+  show($("candidate-caption"), !isBudget);
+  show($("candidate-table"), !isBudget);
+  show($("review-card"), true);
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (ch) =>
+    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[ch]));
+}
+
+// === 页签切换（人工审批 / 沟通记录） ===
+
+function showTab(name) {
+  activeTab = name;
+  $("tab-review").classList.toggle("active", name === "review");
+  $("tab-usermd").classList.toggle("active", name === "usermd");
+  show($("pane-review"), name === "review");
+  show($("pane-usermd"), name === "usermd");
+  if (name === "usermd") loadUsermd();
+}
+
+// === USER.md 沟通记录（异步通道：提交回复只落盘，不影响图运行） ===
+
+async function loadUsermd() {
+  if (!currentProject) return;
+  // 重渲染前收集未提交的回复草稿，渲染后回填（轮询刷新不打断输入）
+  const drafts = {};
+  document.querySelectorAll(".usermd-reply").forEach((el) => { drafts[el.dataset.qno] = el.value; });
+  try {
+    const data = await api("/api/analysis/" + encodeURIComponent(currentProject) + "/usermd");
+    const focus = (data.focus || "").trim();
+    show($("usermd-focus"), !!focus);
+    $("usermd-focus").innerHTML = focus
+      ? '<div class="usermd-q"><b>用户着重关心的内容</b><pre>' + esc(focus) + "</pre></div>"
+      : "";
+    const box = $("usermd-questions");
+    box.innerHTML = "";
+    const questions = data.questions || [];
+    if (!questions.length) {
+      box.innerHTML = '<p class="hint">（暂无 Agent 提问）</p>';
+    }
+    for (const q of questions) {
+      const div = document.createElement("div");
+      div.className = "usermd-q";
+      let html = '<div class="usermd-q-title">' + esc(q.no + ". " + q.title) + "</div>";
+      if (q.body) html += '<pre class="usermd-q-body">' + esc(q.body) + "</pre>";
+      if (q.answer) {
+        html += '<div class="usermd-a"><b>用户回答：</b><pre>' + esc(q.answer) + "</pre></div>";
+      }
+      html += '<textarea class="usermd-reply" data-qno="' + q.no + '" rows="2" ' +
+              'placeholder="回复该问题（只落盘 USER.md，Agent 下一波主题分析前读取）"></textarea>' +
+              '<button type="button" class="usermd-send" data-qno="' + q.no + '">提交回复</button>';
+      div.innerHTML = html;
+      box.appendChild(div);
+    }
+    document.querySelectorAll(".usermd-reply").forEach((el) => {
+      if (drafts[el.dataset.qno]) el.value = drafts[el.dataset.qno];
+    });
+    document.querySelectorAll(".usermd-send").forEach((btn) => {
+      btn.addEventListener("click", () => submitUsermdReply(parseInt(btn.dataset.qno, 10)));
+    });
+  } catch (e) {
+    $("usermd-hint").textContent = "沟通记录加载失败: " + e.message;
+  }
+}
+
+async function submitUsermdReply(questionNo) {
+  const ta = document.querySelector('.usermd-reply[data-qno="' + questionNo + '"]');
+  const answer = (ta && ta.value || "").trim();
+  if (!answer) { $("usermd-hint").textContent = "回复内容不能为空"; return; }
+  $("usermd-hint").textContent = "提交中…";
+  try {
+    await api("/api/analysis/" + encodeURIComponent(currentProject) + "/usermd/reply", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question_no: questionNo, answer: answer}),
+    });
+    $("usermd-hint").textContent = "已写入 USER.md（不影响图运行，Agent 下一波任务读取）";
+    await loadUsermd();
+  } catch (e) {
+    $("usermd-hint").textContent = e.message;
+  }
+}
+
+async function submitDecision(decision, functions) {
+  $("decision-hint").textContent = "提交中…";
+  try {
+    await api("/api/analysis/" + encodeURIComponent(currentProject) + "/decision", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({decision, functions}),
+    });
+    $("decision-hint").textContent = "";
+    show($("review-card"), false);
+    if (!pollTimer) pollTimer = setInterval(poll, 2000);
+    poll();
+  } catch (e) {
+    $("decision-hint").textContent = e.message;
+  }
+}
+
+async function loadReport() {
+  try {
+    const data = await api("/api/analysis/" + encodeURIComponent(currentProject) + "/report");
+    const body = $("report-body");
+    if (window.marked) {
+      body.innerHTML = window.marked.parse(data.markdown || "");
+    } else {
+      // CDN 不可用时的回退：纯文本展示
+      body.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.textContent = data.markdown || "";
+      body.appendChild(pre);
+    }
+    show($("report-card"), true);
+  } catch (e) {
+    /* 报告可能尚未落盘，下一轮轮询再试 */
+  }
+}
+
+$("btn-start").addEventListener("click", startAnalysis);
+$("btn-attach").addEventListener("click", () => {
+  const project = $("project-name").value.trim();
+  if (!project) { $("start-hint").textContent = "请填写项目名"; return; }
+  $("start-hint").textContent = "";
+  attachProject(project);
+});
+$("btn-confirm").addEventListener("click", () => submitDecision("CONFIRM", null));
+$("btn-budget-continue").addEventListener("click", () => submitDecision("CONTINUE", null));
+$("btn-modify").addEventListener("click", () => {
+  const addrs = Array.from(document.querySelectorAll(".cand-check:checked")).map((el) => el.value);
+  if (!addrs.length) { $("decision-hint").textContent = "MODIFY 需要至少勾选一个函数地址"; return; }
+  submitDecision("MODIFY", addrs);
+});
+$("check-all").addEventListener("change", (e) => {
+  document.querySelectorAll(".cand-check").forEach((el) => { el.checked = e.target.checked; });
+});
+$("tab-review").addEventListener("click", () => showTab("review"));
+$("tab-usermd").addEventListener("click", () => showTab("usermd"));
+$("btn-usermd-refresh").addEventListener("click", loadUsermd);
+</script>
+</body>
+</html>
