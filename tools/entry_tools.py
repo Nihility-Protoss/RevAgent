@@ -7,8 +7,10 @@
 存储侧枚举一律为整数，公开视图通过 :func:`entry_public_dict` 逐字段映射为小写字符串。
 """
 
+import base64
 import copy
 import functools
+import json
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -38,6 +40,99 @@ _ENUM_FILTER_FIELDS = {
 }
 
 _MISSING = object()
+
+# 固定消费者规则：类型/阶段白名单、单页上限与是否保留 insufficient_data 条目
+CONSUMER_SPECS = {
+    "phase1_behavior": {
+        "types": {"sample", "finding"}, "phases": {"phase0"},
+        "limit": 50, "include_insufficient": True,
+    },
+    "scheduler": {
+        "types": {"sample", "finding", "function"}, "phases": {"phase0", "phase1"},
+        "limit": 50, "include_insufficient": True,
+    },
+    "human_review": {
+        "types": {"sample", "finding", "function"}, "phases": {"phase0", "phase1"},
+        "limit": 20, "include_insufficient": True,
+    },
+    "phase4_overview": {
+        "types": {"sample", "finding"}, "phases": {"phase0", "phase1"},
+        "limit": 20, "include_insufficient": False,
+    },
+    "phase4_shard": {
+        "types": {"function"}, "phases": {"phase3"},
+        "limit": 5, "include_insufficient": False,
+    },
+    "phase4_aggregate": {
+        "types": {"report"}, "phases": {"phase4"},
+        "limit": 20, "include_insufficient": False,
+    },
+}
+
+# 上下文元素固定投影字段，保证不同版本/不同消费者的结构稳定
+_CONTEXT_FIELDS = (
+    "entry_id", "entry_type", "subject", "version", "conclusion", "confidence",
+    "validation", "review", "annotations", "payload", "relation_refs",
+)
+
+
+def _encode_context_cursor(offset: int) -> str:
+    """把偏移量编码为 base64url 游标（去掉填充符，便于 Agent 复制）。"""
+    raw = json.dumps({"offset": offset}, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_context_cursor(cursor) -> int:
+    """解码 base64url 游标；任何格式问题统一抛 invalid_cursor。"""
+    try:
+        if not isinstance(cursor, str):
+            raise ValueError("cursor 必须是字符串")
+        padded = cursor + "=" * (-len(cursor) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        offset = data["offset"]
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset 必须为非负整数")
+        return offset
+    except Exception as exc:  # 解码/结构/字段类型错误都视为非法游标
+        raise StoreError("invalid_cursor", {"cursor": str(cursor)}) from exc
+
+
+def _project_context_entry(public: dict) -> dict:
+    """把条目公开视图的 head 版本压缩为固定字段的上下文元素。"""
+    head = public["versions"][0]
+    projected = {
+        "entry_id": public["entry_id"],
+        "entry_type": public["entry_type"],
+        "subject": copy.deepcopy(public["subject"]),
+        "version": public["head_version"],
+        "conclusion": head["conclusion"],
+        "confidence": head["confidence"],
+        "validation": copy.deepcopy(head["validation"]),
+        "review": copy.deepcopy(head["review"]),
+        "annotations": copy.deepcopy(head["annotations"]),
+        "payload": copy.deepcopy(head["payload"]),
+        "relation_refs": copy.deepcopy(head["relation_refs"]),
+    }
+    return {field: projected[field] for field in _CONTEXT_FIELDS}
+
+
+def _context_priority(item: dict) -> int:
+    """读取函数候选 priority；缺失或非整数时按 0 处理，避免排序崩溃。"""
+    candidate = (item.get("payload") or {}).get("candidate") or {}
+    priority = candidate.get("priority", 0)
+    if isinstance(priority, bool) or not isinstance(priority, int):
+        return 0
+    return priority
+
+
+def _context_sort_key(item: dict):
+    """稳定排序键：review confirmed → conclusion valid → candidate priority desc → entry_id asc。"""
+    return (
+        0 if item["review"]["status"] == "confirmed" else 1,
+        0 if item["validation"]["conclusion"]["status"] == "valid" else 1,
+        -_context_priority(item),
+        item["entry_id"],
+    )
 
 
 def _version_public(version):
@@ -245,6 +340,91 @@ def bb_query_entries(project_name, filters=None, fields=None, limit=50, cursor=N
         "data": page,
         "total": len(matches),
         "next_cursor": next_cursor,
+    }
+
+
+@_wrap
+def bb_build_context(
+    consumer, project_name, token_budget=6000, cursor=None, run_id=None
+) -> dict:
+    """为固定消费者构建有界、可分页的条目上下文。
+
+    过滤基于 head 版本：类型/阶段白名单、任一验证层 invalid 与 rejected 审查默认排除，
+    ``include_insufficient=False`` 的消费者额外排除 subject=insufficient_data。
+    ``phase4_aggregate`` 只保留 ``payload.report_kind=shard`` 且 producer.run_id 匹配的条目。
+    排序依次为 review confirmed、conclusion valid、候选 priority 降序、entry_id 升序；
+    逐条按 ``len(json.dumps(entry, ensure_ascii=False)) // 4`` 估算 token，超预算即停止分页。
+    """
+    spec = CONSUMER_SPECS.get(consumer)
+    if spec is None:
+        raise ValueError(f"未知消费者: {consumer}")
+    budget = int(token_budget)
+    if budget <= 0:
+        raise ValueError("token_budget 必须为正整数")
+    if consumer == "phase4_aggregate" and not run_id:
+        raise ValueError("phase4_aggregate 需要 run_id")
+
+    offset = 0 if cursor is None else _decode_context_cursor(cursor)
+
+    # 候选集：先按消费者规则过滤 head，再统一投影
+    candidates: List[dict] = []
+    for entry in get_store(project_name).list_entries():
+        public = entry_public_dict(entry)
+        head = public["versions"][0]
+        if public["entry_type"] not in spec["types"]:
+            continue
+        if head["producer"]["phase"] not in spec["phases"]:
+            continue
+        validation = head["validation"]
+        if head["review"]["status"] == "rejected":
+            continue
+        if any(
+            validation[layer]["status"] == "invalid"
+            for layer in ("data", "subject", "conclusion")
+        ):
+            continue
+        if (
+            not spec["include_insufficient"]
+            and validation["subject"]["status"] == "insufficient_data"
+        ):
+            continue
+        if consumer == "phase4_aggregate":
+            payload = head["payload"] or {}
+            if payload.get("report_kind") != "shard":
+                continue
+            if head["producer"]["run_id"] != run_id:
+                continue
+        candidates.append(_project_context_entry(public))
+
+    candidates.sort(key=_context_sort_key)
+    total = len(candidates)
+    offset = min(offset, total)
+
+    page: List[dict] = []
+    used_tokens = 0
+    index = offset
+    while index < total and len(page) < int(spec["limit"]):
+        item = candidates[index]
+        estimate = len(json.dumps(item, ensure_ascii=False)) // 4
+        # 单条超过整个预算时永远无法返回，直接报错而不是返回会死循环的游标
+        if estimate > budget:
+            raise StoreError(
+                "context_entry_too_large",
+                {"entry_id": item["entry_id"], "estimate": estimate, "token_budget": budget},
+            )
+        if used_tokens + estimate > budget:
+            break
+        page.append(item)
+        used_tokens += estimate
+        index += 1
+
+    next_cursor = _encode_context_cursor(index) if index < total else None
+    return {
+        "status": "success",
+        "entries": page,
+        "next_cursor": next_cursor,
+        "omitted_count": total - index,
+        "total": total,
     }
 
 
