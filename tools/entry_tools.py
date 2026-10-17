@@ -8,6 +8,7 @@
 """
 
 import copy
+import functools
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -109,14 +110,13 @@ def _error(exc: Exception, reason: Optional[str] = None) -> dict:
 def _wrap(func):
     """工具边界装饰器：统一捕获并封装异常。"""
 
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except (StoreError, ValueError, ValidationError, OSError) as exc:
             return _error(exc)
 
-    wrapper.__name__ = func.__name__
-    wrapper.__doc__ = func.__doc__
     return wrapper
 
 
@@ -299,24 +299,31 @@ def bb_review_entries(refs, decision, project_name, reviewer="human", note="") -
     """批量人工审查：先校验全部 ref 均为当前 head，再逐项追加审查版本。
 
     任何一个 ref 版本过期都返回 ``version_conflict`` 且不写入任何内容；
+    同一 ``entry_id`` 的重复 ref 返回 ``invalid_request`` 且不写入任何内容；
     全部成功后强制 ``flush()`` 落盘。返回 ``reviewed_refs`` 含更新后的版本号。
     """
     store = get_store(project_name)
     status_int = enum_to_int(ReviewStatus, decision)
 
-    # 第一遍：校验全部 ref 都是当前 head，避免部分成功后才冲突
+    # 第一遍：校验全部 ref 都是当前 head，避免部分成功后才冲突；
+    # 同一 entry_id 出现重复 ref 会破坏 all-or-nothing，直接拒绝
     heads: Dict[str, int] = {}
     producers: Dict[str, dict] = {}
     for ref in refs:
-        entry = store.get_entry(ref["entry_id"], include_history=True)
+        entry_id = ref["entry_id"]
+        if entry_id in heads:
+            raise StoreError(
+                "invalid_request", {"entry_id": entry_id, "issue": "duplicate_ref"}
+            )
+        entry = store.get_entry(entry_id, include_history=True)
         if ref["version"] != entry.head_version:
             raise StoreError(
                 "version_conflict",
-                {"entry_id": ref["entry_id"], "head": entry.head_version},
+                {"entry_id": entry_id, "head": entry.head_version},
             )
-        heads[ref["entry_id"]] = entry.head_version
+        heads[entry_id] = entry.head_version
         # 审查 producer 复用被审版本的 producer，保证审计可追溯
-        producers[ref["entry_id"]] = entry.versions[-1].producer.model_dump()
+        producers[entry_id] = entry.versions[-1].producer.model_dump()
 
     # 第二遍：逐项追加 change_reason=review 的完整版本（保留分析内容）
     reviewed_refs = []

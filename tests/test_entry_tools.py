@@ -87,3 +87,42 @@ def test_query_history_runtime_restart_and_clean_errors(tmp_path, monkeypatch):
     missing = bb_get_entry("missing", "proj")
     assert missing["status"] == "error"
     assert "Traceback" not in missing["error"]
+
+
+def test_review_entries_rejects_duplicate_refs_without_writes(tmp_path, monkeypatch):
+    """同一 entry_id 的重复 ref 必须整体拒绝且零写入（保持 all-or-nothing）。"""
+    import inspect
+
+    monkeypatch.chdir(tmp_path)
+    try:
+        created = bb_create_entry(
+            "function", "asm_address", "0x401000",
+            {"conclusion": "候选", "confidence": "medium",
+             "payload": {"func_name": "sub_401000"},
+             "evidence_refs": [], "annotations": {}, "relation_refs": []},
+            {"phase": "phase1", "agent": "boundary", "run_id": "run-1"},
+            "proj", "op-dup",
+        )
+        entry_id = created["data"]["entry_id"]
+
+        result = bb_review_entries(
+            [{"entry_id": entry_id, "version": 1},
+             {"entry_id": entry_id, "version": 1}],
+            "confirmed", "proj",
+        )
+        assert result["status"] == "error"
+        assert result["reason"] == "invalid_request"
+        # 零写入：head 版本号与版本数均未变化
+        head = bb_get_entry(entry_id, "proj")["data"]
+        assert head["head_version"] == 1
+        assert len(bb_get_entry_history(entry_id, "proj")["data"]["versions"]) == 1
+
+        # _wrap 不得擦除公开签名（functools.wraps 保留 __wrapped__/注解）
+        signature = inspect.signature(bb_create_entry)
+        params = list(signature.parameters)
+        assert params == [
+            "entry_type", "subject_kind", "subject_key", "output",
+            "producer", "project_name", "idempotency_key",
+        ]
+    finally:
+        shutdown_stores()
