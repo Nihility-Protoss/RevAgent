@@ -682,6 +682,10 @@ def _upsert_analysis(
             entry_type, subject_kind, subject_key, output, producer,
             project_name, key,
         )
+        if created.get("status") == "error":
+            # 内层写入失败（如 payload 校验拒绝）：向上传播 error dict，
+            # 保持 {"written", "ref"} 形状契约，避免 KeyError 逃逸出 _wrap 的捕获集
+            return {**created, "written": 0, "ref": None}
         data = created["data"]
         return {"written": 1, "ref": {"entry_id": data["entry_id"], "version": data["head_version"]}}
 
@@ -690,6 +694,8 @@ def _upsert_analysis(
         entry_id, entry.head_version, dict(output), producer,
         project_name, key, change_reason="analysis",
     )
+    if appended.get("status") == "error":
+        return {**appended, "written": 0, "ref": None}
     return {
         "written": 1,
         "ref": {"entry_id": entry_id, "version": appended["data"]["head_version"]},
@@ -719,6 +725,8 @@ def _project_sample_findings(worker_output: WorkerOutput, worker_name: str,
             EntryType.SAMPLE, SubjectKind.SAMPLE, "sample",
             {**base_output, "payload": sample, "relation_refs": []},
         )
+        if result.get("status") == "error":
+            return result
         written += result["written"]
         refs.append(result["ref"])
 
@@ -743,6 +751,8 @@ def _project_sample_findings(worker_output: WorkerOutput, worker_name: str,
                 "relation_refs": [dict(sample_ref)] if sample_ref else [],
             },
         )
+        if result.get("status") == "error":
+            return result
         written += result["written"]
         refs.append(result["ref"])
     return {"written": written, "refs": refs}
@@ -782,6 +792,8 @@ def _project_candidates(worker_output: WorkerOutput, worker_name: str,
                 "relation_refs": [],
             },
         )
+        if result.get("status") == "error":
+            return result
         written += result["written"]
         refs.append(result["ref"])
     return {"written": written, "refs": refs}
@@ -817,6 +829,8 @@ def _project_scheduler(worker_output: WorkerOutput, worker_name: str,
             "relation_refs": [],
         },
     )
+    if result.get("status") == "error":
+        return result
     return {"written": result["written"], "refs": [result["ref"]]}
 
 

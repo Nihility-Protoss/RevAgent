@@ -146,7 +146,7 @@ Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`
 - **交互方式**: CLI `input()` 逐行读取人工回复（`prompt_human` 为模块级函数，便于测试 monkeypatch）；LangGraph `interrupt()` 化留待 Step 2
 - **审查内容**: 行为定型结论、高风险字符串/API 指标计数、Top 20 候选函数（由条目库读取并渲染）
 - **回复协议**:
-  - `CONFIRM` — 同意继续，使用推荐候选函数（`analysis_priority >= 7` 的 Top 20）
+  - `CONFIRM` — 同意继续，使用调度决策条目当前的 `selected_function_refs`（scheduler 推荐的候选函数精确版本引用，见 `graph_nodes.approval_gate_node`）
   - `MODIFY <addr1>,<addr2>,...` — 指定要分析的函数地址列表，逗号分隔
   - 连续 3 次无法识别的回复后默认按 CONFIRM 放行
 - **HITL 版本审查**: 人工决定不直接改条目内容，而是经 `bb_review_entries` 追加 review 版本（携带 `ReviewStatus`、reviewer、note），保留原始 Worker 结论与人工裁定的完整审计链；不存在的地址记入 decision payload 的 `unknown_addresses`，不创建函数条目。

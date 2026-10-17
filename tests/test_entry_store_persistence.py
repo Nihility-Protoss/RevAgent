@@ -75,6 +75,28 @@ def test_write_count_dirty_tracking_and_plain_int_pickle(tmp_path, monkeypatch):
     store.close()
 
 
+def test_flush_skips_stale_snapshot_overwrite(tmp_path):
+    """竞态回归：flush 在 _lock 内编码、在 _flush_lock 内落盘；迟到的旧快照
+    （编码阶段抓到的 revision 已被更新的 flush 落盘）不得回写覆盖新快照。"""
+    directory = tmp_path / "entries"
+    store = ProjectStore("p", directory=directory, flush_interval_seconds=0)
+    store.set_runtime("k", 1)
+    store.flush()
+    store.set_runtime("k", 2)
+    store.flush()
+    advanced = store.persisted_revision
+    on_disk = (directory / "store.pickle").read_bytes()
+
+    # 确定性复现交错：直接让本线程的 flush 抓到一个旧 revision
+    # （正常路径 revision 只增不减，等价于 timer flush 编码后、取得 _flush_lock 前
+    # 另一个 flush 已落盘了更新 revision 的场景）
+    store.revision = advanced - 1
+    store.flush()
+    assert store.persisted_revision == advanced
+    assert (directory / "store.pickle").read_bytes() == on_disk
+    store.close()
+
+
 def test_all_invalid_snapshots_fail_closed(tmp_path):
     directory = tmp_path / "entries"
     store = ProjectStore("p", directory=directory)

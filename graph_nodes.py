@@ -196,19 +196,39 @@ def build_worker_task(spec: WorkerSpec, state: AnalysisState, run_id: str) -> st
     """构建发给 Worker Agent 的任务文本。
 
     任务文本必须包含本次调用的幂等键公式（``{run_id}:{phase}:{worker_name}:{subject_key}``
-    及代入具体值后的前缀），full 模式 Agent 主动写入时才能与框架兜底投影使用同一公式。
+    及代入具体值后的前缀）和该角色适用的 subject_key 约定，full 模式 Agent 主动写入时
+    才能与框架兜底投影使用同一公式、同一 subject_key。
     """
     project = state["sample_project_name"]
     export_dir = state.get("sample_export_dir", "")
     phase = _worker_phase(spec.name)
     key_prefix = f"{run_id}:{phase}:{spec.name}"
+    from tools.entry_tools import _SAMPLE_FINDING_WORKERS
+
+    if spec.name in _SAMPLE_FINDING_WORKERS:
+        subject_guide = (
+            'subject_key 约定: 样本条目的 subject_key 固定为 "sample"；'
+            '每个发现条目的 subject_key 为 "{category}:{name}"'
+            "（category 为 lowercase 类别名，如 string:http://evil.example/c2）。"
+        )
+    elif spec.name == "function_boundary_detector":
+        subject_guide = (
+            "subject_key 约定: 函数条目的 subject_key 为规范化汇编地址"
+            "（0x 前缀 + 小写十六进制，如 0x401000；等价于 normalize_asm_address 的输出）。"
+        )
+    else:  # scheduler
+        subject_guide = (
+            'subject_key 约定: 决策条目的 subject_key 固定为 "phase2"；'
+            "payload 中的函数地址会先规范化为 0x 小写十六进制地址，"
+            "再经主题索引解析为函数条目的精确版本引用。"
+        )
     return (
         f"分析样本: {project}, "
         f"导出目录: {export_dir}\n"
         f"本次运行 run_id: {run_id}，你的阶段: {phase}，worker 名: {spec.name}。\n"
         f"你的产物将由框架按幂等键公式写入黑板: "
         f"{{run_id}}:{{phase}}:{{worker_name}}:{{subject_key}}，"
-        f"本次调用即 {key_prefix}:<subject_key>。"
+        f"本次调用即 {key_prefix}:<subject_key>。{subject_guide}"
         f"若你自行调用写入工具，必须使用相同的键公式与本次 run_id/阶段/worker 名。"
     )
 

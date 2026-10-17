@@ -76,17 +76,42 @@ def test_insufficient_data_does_not_create_empty_finding(tmp_path, monkeypatch):
 
 
 def test_worker_task_contains_idempotency_key_formula(tmp_path, monkeypatch):
-    """任务文本必须包含幂等键公式及本次调用的具体值（full 模式 Agent 主动写入与框架兜底一致）。"""
+    """任务文本必须包含幂等键公式、本次调用的具体值与角色适用的 subject_key 约定。"""
     from graph_nodes import build_worker_task
-    from workers.specs import scheduler, string_artifact_analyst
+    from workers.specs import (
+        function_boundary_detector, scheduler, string_artifact_analyst,
+    )
 
     monkeypatch.chdir(tmp_path)
     state = {"sample_project_name": "proj", "sample_export_dir": "data/input/x"}
     task = build_worker_task(string_artifact_analyst, state, "run-9")
     assert "{run_id}:{phase}:{worker_name}:{subject_key}" in task
     assert "run-9:phase0:string_artifact_analyst:" in task
+    # 样本/发现 Worker 拿到 sample + finding 约定
+    assert '"sample"' in task
+    assert "{category}:{name}" in task
+
+    task = build_worker_task(function_boundary_detector, state, "run-9")
+    assert "run-9:phase1:function_boundary_detector:" in task
+    assert "0x" in task and "小写十六进制" in task
+
     task = build_worker_task(scheduler, state, "run-9")
     assert "run-9:phase2:scheduler:" in task
+    assert '"phase2"' in task
+
+
+def test_invalid_inner_payload_returns_error_not_keyerror(tmp_path, monkeypatch):
+    """回归：WorkerOutput 通过但内层 validate_payload 拒绝（extra=forbid）时，
+    bb_write_worker_output 必须返回 status=error，而不是 KeyError 逃逸。"""
+    monkeypatch.chdir(tmp_path)
+    result = bb_write_worker_output("string_artifact_analyst", {
+        "status": "success", "conclusion": "含未知字段", "confidence": "high",
+        "payload": {"sample": {"overall_assessment": "a", "arch_detection": {},
+                               "unexpected_extra": 1}, "findings": []},
+        "evidence_refs": [], "annotations": {},
+    }, "proj", "run-1")
+    assert result["status"] == "error"
+    assert bb_query_entries("proj", {"entry_type": "sample"})["data"] == []
 
 
 def test_projection_failure_is_logged_and_swallowed(tmp_path, monkeypatch):

@@ -274,11 +274,19 @@ class ProjectStore:
         os.replace(temp_path, main_path)
 
     def flush(self) -> None:
-        """原子落盘：抓版本快照 → 写临时文件并回读校验 → 轮换替换 → 推进 persisted_revision。"""
+        """原子落盘：抓版本快照 → 写临时文件并回读校验 → 轮换替换 → 推进 persisted_revision。
+
+        编码在 ``_lock`` 内、落盘在 ``_flush_lock`` 内，两段之间允许交错：
+        若取得 ``_flush_lock`` 时本快照的 revision 已不新于 ``persisted_revision``
+        （另一个 flush 已落盘了更新快照），则跳过写盘，避免旧快照覆盖新快照。
+        ``persisted_revision`` 的写入与读取都发生在 ``_flush_lock`` 内，保证比较原子。
+        """
         with self._lock:
             revision = self.revision
             data = self._encode_snapshot(revision)
         with self._flush_lock:
+            if revision <= self.persisted_revision:
+                return
             self.directory.mkdir(parents=True, exist_ok=True)
             temp_path = self.directory / "store.pickle.tmp"
             with open(temp_path, "wb") as f:
@@ -286,8 +294,8 @@ class ProjectStore:
             # 与启动加载使用相同的校验函数，写后回读验证再轮换
             self._decode_snapshot(data, self.project_name)
             self._rotate_and_replace(temp_path)
-        with self._lock:
             self.persisted_revision = revision
+        with self._lock:
             self.dirty = self.revision > self.persisted_revision
             self._unflushed = 0
 

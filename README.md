@@ -18,7 +18,7 @@
 - `config.py`、`config.yaml`：管理模型、路径和分析参数。
 - `data/input/`：存放 IDA 导出的样本分析数据。
 - `data/output/`：作为黑板保存两类数据——`extracts/`（Phase -1 预提取分片）与 `entries/`（版本化条目库，内存态经 `store.pickle` 原子快照持久化）。所有 Worker 产物以带完整版本历史的条目形式写入条目库，节点间经上下文构建按需读取，支持阶段间通信与断点续跑。
-- Agent 工具分 **minimal / full** 两种模式（`config.yaml` 的 `agents.tool_mode` 控制，默认 `minimal`）：minimal 模式只注入每个角色的最小读取工具集，full 模式注入完整条目操作工具（写入类工具始终不暴露给 Agent，由图节点在 LLM 调用之外统一落盘）。
+- Agent 工具分 **minimal / full** 两种模式（`config.yaml` 的 `agents.tool_mode` 控制，默认 `minimal`）：minimal 模式只注入每个角色的最小读取工具集，不暴露任何写入工具；full 模式追加通用条目写入工具（`bb_create_entry` / `bb_append_version` / `bb_validate_entry`），允许 Agent 主动写入分析条目，但审查与存储特权工具仍不开放，由图节点在 LLM 调用之外统一执行。
 
 ## 下一步更新目标
 

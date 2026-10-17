@@ -10,7 +10,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-import graph  # 延迟到模块级导入，便于测试 monkeypatch graph.build_graph
+import graph  # 模块级导入：便于测试 monkeypatch graph.build_graph
 from tools.entry_store import shutdown_stores
 
 load_dotenv()

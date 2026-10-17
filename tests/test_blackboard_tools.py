@@ -1,8 +1,5 @@
 import json
-import os
 import pathlib
-import sys
-import tempfile
 
 import pytest
 
