@@ -1,6 +1,8 @@
 """LangGraph 节点工厂与业务节点。
 """
+import copy
 import json
+import os
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -16,24 +18,35 @@ from state import AnalysisState
 from tools.agent_tools import get_agent_tools
 from tools.blackboard_tools import (
     _now_iso,
-    bb_has_artifact,
     bb_list_summaries,
     bb_read_summary,
-    bb_write_artifact,
     bb_write_summary,
     load_function_data,
 )
+from tools.entry_models import (
+    ConclusionValidationStatus,
+    DataValidationStatus,
+    ReviewStatus,
+    SubjectValidationStatus,
+    WorkerOutput,
+    enum_to_int,
+    normalize_asm_address,
+)
 from tools.entry_tools import (
+    bb_append_version,
+    bb_build_context,
     bb_checkpoint,
+    bb_find_operation,
+    bb_get_entry,
     bb_get_runtime,
     bb_load_checkpoint,
     bb_log_event,
     bb_query_entries,
+    bb_review_entries,
     bb_set_runtime,
     bb_write_worker_output,
 )
 from tools.file_loaders import detect_sample_type, pre_extract_sample
-from workers.extractor import build_extraction_prompt
 from workers.knowledge import KNOWLEDGE_REGISTRY, load_knowledge, match_guides
 from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
 from workers.phase4.synthesis_agent import AGGREGATOR_PROMPT, SHARD_SYNTHESIS_PROMPT
@@ -156,31 +169,6 @@ def parse_json_loose(text: Any) -> dict:
         return data if isinstance(data, dict) else {"status": "success", "data": data}
     except (json.JSONDecodeError, ValueError):
         return {"status": "parse_failed", "raw": text, "parse_error": True}
-
-
-async def run_extraction(
-    artifact: dict,
-    artifact_type: str,
-    summary_name: str,
-    project_name: str,
-    llm=None,
-    config: Optional[RunnableConfig] = None,
-) -> Optional[dict]:
-    """以普通 LLM 调用方式运行 summary extractor，并持久化 summary。
-    """
-    model = llm or get_llm()
-    prompt = build_extraction_prompt(artifact, artifact_type)
-    resp = await invoke_guarded(model, [("user", prompt)], config=config)
-    data = parse_json_loose(getattr(resp, "content", resp))
-    if data.get("parse_error"):
-        bb_log_event(
-            "extractor_parse_failed",
-            {"type": artifact_type, "summary": summary_name},
-            project_name,
-        )
-        return None
-    bb_write_summary(summary_name, data, project_name)
-    return data
 
 
 # === Worker 节点工厂（统一 WorkerOutput 投影） ===
@@ -454,10 +442,10 @@ def _load_active_guides_text(project_name: str) -> str:
 
 APPROVAL_MESSAGE_TEMPLATE = """=== 恶意样本初步分析审查 ===
 
-行为定型: {behavior_type} (置信度: {confidence})
+样本判定: {sample_assessment} (置信度: {confidence})
 高风险字符串指标: {high_risk_strings}
 高风险 API 指标: {high_risk_apis}
-候选函数: {candidate_count} / {total_funcs}
+候选函数: {candidate_count}
 
 请审查以上分析结论，确认：
 1. 行为定型是否合理
@@ -472,36 +460,50 @@ APPROVAL_MESSAGE_TEMPLATE = """=== 恶意样本初步分析审查 ===
 """
 
 
+# 视为高风险的 API 威胁类别（与 Phase 0 API profiler 的 threat_category 取值一致）
+_HIGH_RISK_API_CATEGORIES = {"进程注入", "持久化", "网络通信"}
+
+
 def build_review_message(state: dict) -> str:
-    """根据图状态构建人类可读的审查消息。
+    """基于黑板 ``human_review`` 上下文构建人类可读的审查消息。
+
+    行为判定取 sample 条目的结论，风险指标与候选统计从 finding / function
+    条目的 head 版本汇总，不再依赖图状态中的 payload。
     """
-    behavior_profile = state.get("behavior_profile") or {}
-    string_analysis = state.get("string_analysis") or {}
-    api_behavior = state.get("api_behavior_analysis") or {}
-    function_boundary = state.get("function_boundary_analysis") or {}
+    project = state["sample_project_name"]
+    context = bb_build_context("human_review", project, token_budget=6000)
+    entries = context.get("entries") or []
 
-    behavior_type = behavior_profile.get("behavior_profile", {}).get("primary_type", "Unknown")
-    confidence = behavior_profile.get("behavior_profile", {}).get("confidence", "low")
+    sample_assessment = "Unknown"
+    confidence = "low"
+    high_risk_strings = 0
+    high_risk_apis = 0
+    candidate_count = 0
 
-    high_risk_strings = len([
-        s for s in string_analysis.get("suspicious_patterns", [])
-        if isinstance(s, dict) and s.get("risk_level") == "high"
-    ])
-    high_risk_apis = len([
-        api for api in api_behavior.get("suspicious_apis", [])
-        if isinstance(api, dict) and api.get("threat_category") in ["进程注入", "持久化", "网络通信"]
-    ])
-
-    candidates = function_boundary.get("candidates", [])[:20]
-    total_funcs = function_boundary.get("total_functions", 0)
+    for item in entries:
+        entry_type = item.get("entry_type")
+        payload = item.get("payload") or {}
+        if entry_type == "sample":
+            sample_assessment = item.get("conclusion") or sample_assessment
+            confidence = item.get("confidence") or confidence
+        elif entry_type == "finding":
+            details = payload.get("details") or {}
+            if payload.get("category") == "string" and details.get("risk_level") == "high":
+                high_risk_strings += 1
+            if (
+                payload.get("category") == "api"
+                and details.get("threat_category") in _HIGH_RISK_API_CATEGORIES
+            ):
+                high_risk_apis += 1
+        elif entry_type == "function":
+            candidate_count += 1
 
     return APPROVAL_MESSAGE_TEMPLATE.format(
-        behavior_type=behavior_type,
+        sample_assessment=sample_assessment,
         confidence=confidence,
         high_risk_strings=high_risk_strings,
         high_risk_apis=high_risk_apis,
-        candidate_count=len(candidates),
-        total_funcs=total_funcs,
+        candidate_count=candidate_count,
     )
 
 
@@ -523,80 +525,314 @@ def prompt_human(message: str) -> str:
     return input(message)
 
 
-def approval_gate_node(state: AnalysisState) -> dict:
-    """Phase 2→3 人工审批门（CLI）。3 次无效回复后默认 CONFIRM 放行。
+def _latest_decision_entry(project_name: str) -> Optional[dict]:
+    """查询最新的调度决策条目（按创建顺序返回，取最后一个）。"""
+    data = bb_query_entries(project_name, {"entry_type": "decision"}, limit=50).get("data") or []
+    return data[-1] if data else None
+
+
+def _normalize_modify_addresses(project_name: str, addrs: list[str]) -> tuple[list[dict], list[str]]:
+    """把 MODIFY 地址列表解析为函数 ref 列表；未知地址记入 unknown_addresses。"""
+    refs: list[dict] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for addr in addrs:
+        try:
+            normalized = normalize_asm_address(addr)
+        except ValueError:
+            unknown.append(addr)
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        data = bb_query_entries(
+            project_name, {"entry_type": "function", "subject.key": normalized}, limit=1
+        ).get("data") or []
+        if not data:
+            unknown.append(normalized)
+        else:
+            refs.append({"entry_id": data[0]["entry_id"], "version": data[0]["head_version"]})
+    return refs, unknown
+
+
+def _finalize_human_review(
+    project_name: str,
+    run_id: str,
+    decision_entry: dict,
+    selected_refs: list[dict],
+    summary: dict,
+) -> None:
+    """对选中函数的当前 head 写入人工审查，并把 decision 指向审查后的新版本。
+
+    未选中的函数条目保持原审查状态；decision 自身追加 change_reason=review
+    的版本，payload 中的 selected_function_refs 更新为审查后的精确版本。
     """
+    head = decision_entry["versions"][0]
+    payload = head.get("payload") or {}
+
+    reviewed_refs = selected_refs
+    if selected_refs:
+        review_result = bb_review_entries(
+            selected_refs, "confirmed", project_name,
+            reviewer="human", note="HITL approval gate",
+        )
+        if review_result.get("status") == "success":
+            reviewed_refs = review_result["reviewed_refs"]
+        else:
+            bb_log_event(
+                "approval_gate_review_failed",
+                {"reason": review_result.get("reason"), "error": review_result.get("error")},
+                project_name,
+            )
+
+    producer = head.get("producer") or {
+        "phase": "phase2", "agent": "scheduler", "run_id": run_id,
+    }
+    changes = {
+        "payload": {
+            "action": payload.get("action", ""),
+            "selected_function_refs": reviewed_refs,
+            "summary": summary,
+        },
+        "review": {
+            "status": enum_to_int(ReviewStatus, "confirmed"),
+            "reviewer": "human",
+            "reviewed_at": _now_iso(),
+            "note": "HITL approval gate",
+        },
+    }
+    bb_append_version(
+        decision_entry["entry_id"],
+        decision_entry["head_version"],
+        changes,
+        producer,
+        project_name,
+        f"{run_id}:phase2:scheduler:phase2:human-review",
+        change_reason="review",
+    )
+
+
+def approval_gate_node(state: AnalysisState) -> dict:
+    """Phase 2→3 人工审批门（CLI）。审查结果直接持久化为条目版本，节点返回 {}。
+
+    CONFIRM 采用调度决策当前的 selected_function_refs；MODIFY 规范化地址后解析为
+    函数条目，不存在的地址写入 decision.payload.summary.unknown_addresses（不创建
+    空函数）。3 次无效回复后默认 CONFIRM，走相同的写入路径。
+    """
+    project = state["sample_project_name"]
+    run_id = state.get("run_id") or ""
+    decision_entry = _latest_decision_entry(project)
+    if decision_entry is None:
+        bb_log_event("approval_gate_no_decision", {"run_id": run_id}, project)
+        return {}
+
+    head = decision_entry["versions"][0]
+    payload = head.get("payload") or {}
+    summary = dict(payload.get("summary") or {})
+    default_refs = list(payload.get("selected_function_refs") or [])
+
     print(build_review_message(state))
-    max_attempts = 3
-    for attempt in range(max_attempts):
+    selected_refs: Optional[list[dict]] = None
+    for _attempt in range(3):
         reply = prompt_human("请回复 CONFIRM 或 MODIFY <addr1>,<addr2>,...: ")
         decision, addrs = parse_approval_reply(reply)
         if decision == "confirm":
-            return {"phase2_human_decision": "CONFIRM"}
+            selected_refs = list(default_refs)
+            break
         if decision == "modify":
-            return {
-                "phase2_human_decision": reply.strip(),
-                "human_approved_functions": addrs,
-            }
+            selected_refs, unknown = _normalize_modify_addresses(project, addrs or [])
+            if unknown:
+                summary["unknown_addresses"] = unknown
+            break
         print(f"[ERROR] 无法识别回复: {reply.strip()}，请使用 CONFIRM 或 MODIFY 格式。")
-    return {"phase2_human_decision": "CONFIRM (default after max attempts)"}
+
+    if selected_refs is None:
+        # 3 次无效输入默认 CONFIRM：与正常 CONFIRM 使用相同的写入路径
+        selected_refs = list(default_refs)
+
+    _finalize_human_review(project, run_id, decision_entry, selected_refs, summary)
+    return {}
 
 
-# === Phase 3: 函数级深度分析（串行循环，Send 并行留待 Step 3）===
+# === Phase 3: 函数级深度分析（同条目追加版本，Send 并行留待 Step 3） ===
+
+# Phase 3 分析的幂等键公式：与 Worker 投影公式保持一致
+_PHASE3_WORKER = "function_deep_analyzer"
+_PHASE3_IDEMPOTENCY_KEY = "{run_id}:phase3:{worker}:{entry_id}"
+
+
+def _load_latest_decision_refs(project_name: str) -> list[dict]:
+    """读取最新调度决策中人工确认过的 selected_function_refs。"""
+    data = bb_query_entries(project_name, {"entry_type": "decision"}, limit=50).get("data") or []
+    if not data:
+        return []
+    head = data[-1]["versions"][0]
+    return list((head.get("payload") or {}).get("selected_function_refs") or [])
+
+
+def _function_index_contains(export_dir: str, addr: str) -> bool:
+    """判断函数索引文件中是否包含指定地址（宽松的大小写匹配）。"""
+    index_path = os.path.join(export_dir, "function_index.txt")
+    if not os.path.exists(index_path):
+        return False
+    try:
+        with open(index_path, "r", encoding="utf-8", errors="ignore") as f:
+            return addr.lower() in f.read().lower()
+    except OSError:
+        return False
+
+
+def _validation_with_subject_status(validation: dict, subject_status: Optional[str] = None) -> dict:
+    """把公开视图（枚举小写字符串名）的 validation 转换为存储整数视图。
+
+    ``subject_status`` 非空时覆盖 subject 层状态；三层状态全部经 enum_to_int
+    转换，保证 append_version 的 pydantic 校验通过。
+    """
+    validation = copy.deepcopy(validation) or {}
+    data = validation.get("data") or {}
+    subject = validation.get("subject") or {}
+    conclusion = validation.get("conclusion") or {}
+    if subject_status is not None:
+        subject["status"] = subject_status
+    return {
+        "data": {
+            "status": enum_to_int(DataValidationStatus, data.get("status", "valid")),
+            "errors": list(data.get("errors") or []),
+        },
+        "subject": {
+            "status": enum_to_int(SubjectValidationStatus, subject.get("status", "unknown")),
+            "evidence_refs": list(subject.get("evidence_refs") or []),
+        },
+        "conclusion": {
+            "status": enum_to_int(ConclusionValidationStatus, conclusion.get("status", "unverified")),
+            "evidence_refs": list(conclusion.get("evidence_refs") or []),
+        },
+    }
+
+
+def _build_phase3_changes(
+    head: dict,
+    func_data: dict,
+    export_dir: str,
+    addr: str,
+    output: WorkerOutput,
+) -> dict:
+    """把函数 head 与新的 WorkerOutput 归并为一次 change_reason=analysis 的版本变更。
+
+    - 成功：head.payload.candidate 保留，payload.analysis 写入新分析结果；
+      代码片段与函数索引均存在时 validation.subject.status 置为 valid。
+    - 数据不足：仍追加版本以保留分析历史，但 validation.subject.status 置为
+      insufficient_data，payload 保持 head 不变。
+    """
+    head_payload = head.get("payload") or {}
+    annotations = {**(head.get("annotations") or {}), **(output.annotations or {})}
+
+    if output.status == "insufficient_data":
+        return {
+            "conclusion": output.conclusion,
+            "confidence": output.confidence,
+            "payload": head_payload,
+            "evidence_refs": list(head.get("evidence_refs") or []),
+            "annotations": annotations,
+            "validation": _validation_with_subject_status(
+                head.get("validation"), "insufficient_data"
+            ),
+        }
+
+    has_code = bool(
+        (func_data.get("decompile_snippet") or "").strip()
+        or (func_data.get("disassembly_snippet") or "").strip()
+    )
+    analysis = {
+        key: output.payload.get(key)
+        for key in ("functionality", "key_apis", "suspicious_behaviors",
+                    "related_functions", "analysis_notes")
+        if key in (output.payload or {})
+    }
+    new_payload = {**head_payload, "analysis": analysis}
+    subject_status = None
+    if has_code and _function_index_contains(export_dir, addr):
+        subject_status = "valid"
+    return {
+        "conclusion": output.conclusion,
+        "confidence": output.confidence,
+        "payload": new_payload,
+        "evidence_refs": list(output.evidence_refs or []),
+        "annotations": annotations,
+        "validation": _validation_with_subject_status(head.get("validation"), subject_status),
+    }
+
 
 def make_phase3_node(llm=None):
     """构建 Phase 3 逐函数深度分析节点（串行循环）。
+
+    候选函数取自黑板上最新调度决策的 selected_function_refs（已由审批门审查）；
+    每个函数的分析结果作为 change_reason=analysis 的版本追加到同一函数条目，
+    幂等键为 ``{run_id}:phase3:function_deep_analyzer:{entry_id}``，重跑不产生
+    新的 LLM 调用。节点返回 {}，不再向图状态写 func_analysis_refs。
     """
 
     async def phase3_deep_analysis_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
         model = llm or get_llm()
         project = state["sample_project_name"]
-        function_boundary = state.get("function_boundary_analysis") or {}
-        all_candidates = function_boundary.get("candidates", [])
+        run_id = _resolve_run_id(state)
+        export_dir = state.get("sample_export_dir", "")
 
-        human_addrs = state.get("human_approved_functions")
-        if human_addrs:
-            candidates = [c for c in all_candidates if c.get("func_addr") in human_addrs]
-        else:
-            candidates = [c for c in all_candidates if c.get("analysis_priority", 0) >= 7][:20]
-
-        refs: list[dict] = []
-        if not candidates:
-            bb_log_event("phase3_skipped", {"reason": "no_candidates"}, project)
-            return {"func_analysis_refs": refs}
+        selected_refs = _load_latest_decision_refs(project)
+        if not selected_refs:
+            bb_log_event("phase3_skipped", {"reason": "no_selected_functions"}, project)
+            return {}
 
         guides_text = _load_active_guides_text(project)
 
-        for candidate in candidates:
-            addr = candidate.get("func_addr")
-            name = candidate.get("func_name", f"func_{addr}")
-
-            # 幂等：重跑跳过已完成的函数
-            if bb_has_artifact(f"phase3_func_{addr}", project):
-                refs.append({"addr": addr, "skipped": True})
-                continue
-
-            func_data = load_function_data(addr, state["sample_export_dir"])
-            if func_data.get("status") != "success":
-                refs.append({"addr": addr, "status": "load_failed"})
-                continue
-
-            prompt = build_func_analysis_prompt(
-                addr, name, func_data,
-                guides=guides_text,
-                project_name=project,
+        for ref in selected_refs:
+            entry_id = ref["entry_id"]
+            op_key = _PHASE3_IDEMPOTENCY_KEY.format(
+                run_id=run_id, worker=_PHASE3_WORKER, entry_id=entry_id,
             )
+            # 幂等：同 run 内已完成该函数的深度分析则整体跳过（不发起 LLM 调用）
+            if bb_find_operation(op_key, project).get("data"):
+                continue
+
+            entry_view = bb_get_entry(entry_id, project)["data"]
+            head = entry_view["versions"][0]
+            addr = entry_view["subject"]["key"]
+            func_name = (head.get("payload") or {}).get("func_name") or f"sub_{addr[2:]}"
+
+            func_data = load_function_data(addr, export_dir)
+            prompt = build_func_analysis_prompt(addr, func_name, func_data, guides=guides_text)
             resp = await invoke_guarded(model, [("user", prompt)], config=config)
-            artifact = parse_json_loose(getattr(resp, "content", resp))
-            bb_write_artifact(f"phase3_func_{addr}", artifact, project)
+            raw = parse_json_loose(getattr(resp, "content", resp))
+            try:
+                output = WorkerOutput.model_validate(raw)
+            except Exception as exc:  # 结构化校验失败按 parse_failed 处理
+                output = WorkerOutput(
+                    status="parse_failed", conclusion=f"WorkerOutput 校验失败: {exc}",
+                )
 
-            summary = await run_extraction(
-                artifact, "function_deep", f"phase3_funcs/func_{addr}", project, model, config
+            if output.status == "parse_failed":
+                # 不写版本，仅记录 runtime 失败；重跑会重新分析该函数
+                bb_log_event(
+                    "phase3_parse_failed",
+                    {"entry_id": entry_id, "addr": addr, "raw": str(raw.get("raw", ""))[:200]},
+                    project,
+                )
+                continue
+
+            changes = _build_phase3_changes(head, func_data, export_dir, addr, output)
+            producer = {"phase": "phase3", "agent": _PHASE3_WORKER, "run_id": run_id}
+            bb_append_version(
+                entry_id,
+                entry_view["head_version"],
+                changes,
+                producer,
+                project,
+                op_key,
+                change_reason="analysis",
             )
-            refs.append({"addr": addr, "summary": summary})
             bb_checkpoint(f"phase3_progress_{addr}", project)
 
-        return {"func_analysis_refs": refs}
+        return {}
 
     return phase3_deep_analysis_node
 

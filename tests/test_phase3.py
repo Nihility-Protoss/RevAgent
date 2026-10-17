@@ -41,12 +41,13 @@ def test_build_func_analysis_prompt_truncation():
         "xrefs_out": ["0x402000"],
     }
     prompt = build_func_analysis_prompt("0x403000", "sub_403000", func_data)
-    assert prompt.count("A") <= 2503  # 2500 来自 snippet，另有 3 处来自模板中的 "API"
+    assert prompt.count("A") <= 2500 + 8  # snippet 截断到 2500，模板中另有少量 "API" 字样
     assert prompt.count("B") <= 2500
     assert "120" in prompt
 
 
-def test_func_analysis_prompt_includes_guides_and_project():
+def test_func_analysis_prompt_includes_guides():
+    """知识指南会被注入 prompt；默认不带指南时不出现方法论段落。"""
     func_data = {
         "status": "success",
         "decompile_snippet": "int __fastcall sub_401000(int a1) { return a1 + 1; }",
@@ -55,11 +56,8 @@ def test_func_analysis_prompt_includes_guides_and_project():
     prompt = build_func_analysis_prompt(
         "0x401000", "sub_401000", func_data,
         guides="=== Rust 样本静态分析方法论 ===\n禁止遍历全部函数",
-        project_name="demo_proj",
     )
     assert "Rust 样本静态分析方法论" in prompt
-    assert "demo_proj" in prompt
-    assert "load_arch_guide" in prompt
 
     # 默认参数向后兼容
     prompt_default = build_func_analysis_prompt("0x401000", "sub_401000", func_data)

@@ -32,9 +32,11 @@ from tools.blackboard_tools import board_base_dir
 from tools.entry_tools import (
     bb_checkpoint,
     bb_create_entry,
+    bb_get_entry,
     bb_get_runtime,
     bb_query_entries,
     bb_set_runtime,
+    bb_write_worker_output,
 )
 from tools.token_stats import AnalysisTokenReport, StageTokenStats
 from workers.specs import ALL_SPECS
@@ -135,10 +137,18 @@ SCHEDULER_JSON = json.dumps({
 }, ensure_ascii=False)
 
 FUNC_ANALYSIS_JSON = json.dumps({
-    "func_addr": "0x401000", "func_name": "sub_401000", "status": "success",
-    "functionality": "network_init", "key_apis": ["WSAStartup"],
-    "suspicious_behaviors": ["C2 connect"], "related_functions": [],
-    "confidence": "medium", "analysis_notes": "test",
+    "status": "success",
+    "conclusion": "网络初始化",
+    "confidence": "high",
+    "payload": {
+        "functionality": "初始化网络",
+        "key_apis": ["WSAStartup"],
+        "suspicious_behaviors": [{"behavior": "C2 connect", "evidence": "connect()"}],
+        "related_functions": [],
+        "analysis_notes": "test",
+    },
+    "evidence_refs": ["decompile:0x401000"],
+    "annotations": {"recommended_name": "init_network"},
 }, ensure_ascii=False)
 
 SHARD_JSON = json.dumps({
@@ -407,38 +417,98 @@ def test_parse_approval_reply_invalid():
     assert addrs is None
 
 
-def test_approval_gate_node_confirm_via_prompt_human(monkeypatch):
-    """approval_gate_node 必须通过 graph_nodes.prompt_human 读取回复。"""
+def test_approval_gate_node_confirm_via_prompt_human(tmp_path, monkeypatch):
+    """approval_gate_node 必须通过 graph_nodes.prompt_human 读取回复，CONFIRM 走审查写入。"""
+    monkeypatch.chdir(tmp_path)
+    _make_boundary_and_decision("proj", "run-1")
     monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "CONFIRM")
-    result = graph_nodes.approval_gate_node({"sample_project_name": "t"})
-    assert result["phase2_human_decision"] == "CONFIRM"
+    result = graph_nodes.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
+    assert result == {}
+    reviewed = bb_query_entries("proj", {"entry_type": "function"})["data"][0]
+    assert reviewed["versions"][0]["review"]["status"] == "confirmed"
 
 
-def test_approval_gate_node_modify_via_prompt_human(monkeypatch):
-    monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "MODIFY 0x401000, 0x402000")
-    result = graph_nodes.approval_gate_node({"sample_project_name": "t"})
-    assert result["phase2_human_decision"] == "MODIFY 0x401000, 0x402000"
-    assert result["human_approved_functions"] == ["0x401000", "0x402000"]
-
-
-def test_approval_gate_node_defaults_to_confirm_after_invalid_replies(monkeypatch):
+def test_approval_gate_node_defaults_to_confirm_after_invalid_replies(tmp_path, monkeypatch):
+    """3 次无效回复后默认 CONFIRM，且与正常 CONFIRM 走相同的写入路径。"""
+    monkeypatch.chdir(tmp_path)
+    _make_boundary_and_decision("proj", "run-1")
     replies = iter(["nope", "what?", "???"])
     monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: next(replies))
-    result = graph_nodes.approval_gate_node({"sample_project_name": "t"})
-    assert "CONFIRM" in result["phase2_human_decision"]
+    result = graph_nodes.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
+    assert result == {}
+    reviewed = bb_query_entries("proj", {"entry_type": "function"})["data"][0]
+    assert reviewed["versions"][0]["review"]["status"] == "confirmed"
 
 
-def test_build_review_message_includes_behavior_type():
-    """审查消息应包含 state 中的关键字段。"""
+def _make_boundary_and_decision(project, run_id, addresses=("0x401000",)):
+    """写入函数候选条目与调度决策（scheduler 会把地址解析为函数 ref）。"""
+    bb_write_worker_output("function_boundary_detector", {
+        "status": "success", "conclusion": "候选已筛选", "confidence": "high",
+        "payload": {"candidates": [{
+            "func_addr": address, "func_name": f"sub_{address[2:]}",
+            "analysis_priority": 9,
+        } for address in addresses]},
+        "evidence_refs": [], "annotations": {},
+    }, project, run_id)
+    bb_write_worker_output("scheduler", {
+        "status": "success", "conclusion": "等待审查", "confidence": "high",
+        "payload": {"action": "AWAITING_HUMAN_REVIEW",
+                    "selected_addresses": list(addresses), "summary": {}},
+        "evidence_refs": [], "annotations": {},
+    }, project, run_id)
+
+
+def test_phase3_appends_to_candidate_without_state_payload(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _make_boundary_and_decision("proj", "run-1")
+    before = bb_query_entries("proj", {"entry_type": "function"})["data"][0]
+    monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "CONFIRM")
+
+    result = graph_nodes.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
+    assert result == {}
+    reviewed = bb_get_entry(before["entry_id"], "proj")["data"]
+    assert reviewed["versions"][0]["review"]["status"] == "confirmed"
+
     state = {
-        "behavior_profile": {"behavior_profile": {"primary_type": "Stealer", "confidence": "high"}},
-        "string_analysis": {"suspicious_patterns": [{"risk_level": "high"}, {"risk_level": "high"}]},
-        "api_behavior_analysis": {"suspicious_apis": [{"threat_category": "进程注入"}]},
-        "function_boundary_analysis": {"candidates": [{"func_addr": "0x401000"}] * 15, "total_functions": 100},
+        "sample_project_name": "proj", "sample_export_dir": _make_export_dir(str(tmp_path)),
+        "run_id": "run-1",
     }
-    msg = build_review_message(state)
-    assert "Stealer" in msg
-    assert "high" in msg
+    node = graph_nodes.make_phase3_node(llm=ScriptedFakeChatModel())
+    assert asyncio.run(node(state)) == {}
+    after = bb_get_entry(before["entry_id"], "proj", include_history=True)["data"]
+    assert after["entry_id"] == before["entry_id"]
+    assert after["versions"][-1]["producer"]["phase"] == "phase3"
+    assert after["versions"][-1]["review"]["status"] == "pending"
+    assert after["versions"][-1]["annotations"]["recommended_name"] == "init_network"
+    call_count = _CALL_COUNTS["phase3"]
+    assert asyncio.run(node(state)) == {}
+    assert _CALL_COUNTS["phase3"] == call_count
+
+
+def test_modify_updates_decision_without_rejecting_unselected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _make_boundary_and_decision("proj", "run-1", ("0x401000", "0x402000"))
+    monkeypatch.setattr(
+        graph_nodes, "prompt_human", lambda message: "MODIFY 0x401000,0x409999"
+    )
+    assert graph_nodes.approval_gate_node({
+        "sample_project_name": "proj", "run_id": "run-1",
+    }) == {}
+    decision = bb_query_entries("proj", {"entry_type": "decision"})["data"][0]
+    selected = decision["versions"][0]["payload"]["selected_function_refs"]
+    selected_function = bb_query_entries("proj", {"subject.key": "0x401000"})["data"][0]
+    unselected_function = bb_query_entries("proj", {"subject.key": "0x402000"})["data"][0]
+    assert selected == [{"entry_id": selected_function["entry_id"], "version": 2}]
+    assert unselected_function["versions"][0]["review"]["status"] == "pending"
+    assert decision["versions"][0]["payload"]["summary"]["unknown_addresses"] == ["0x409999"]
+
+
+def test_build_review_message_includes_behavior_type(tmp_path, monkeypatch):
+    """审查消息应基于黑板 human_review 上下文生成，并包含 CONFIRM/MODIFY 协议。"""
+    monkeypatch.chdir(tmp_path)
+    _make_boundary_and_decision("proj", "run-1")
+    msg = build_review_message({"sample_project_name": "proj"})
+    assert "候选函数" in msg
     assert "CONFIRM" in msg
     assert "MODIFY" in msg
 
