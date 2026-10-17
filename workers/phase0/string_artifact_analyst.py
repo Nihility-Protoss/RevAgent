@@ -5,7 +5,7 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 你的任务是通过分析 strings.txt 中的内容，识别数据文件名、PDB路径、密钥字符串、URL、注册表路径、互斥体名等关键线索。
 核心原则：对于 Windows PE 样本，strings.txt 的优先级高于 imports.txt（API 哈希可绕过 IAT，但字符串无法隐藏）。""",
 
-    input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化字符串数据（strings_extract.json）。
+    input_data_description="""你将通过工具 read_strings_data 读取预提取的结构化字符串数据（strings_extract.json）。
 数据已按类别分组：
 - by_category.urls: URL/域名列表
 - by_category.registry_keys: 注册表路径
@@ -14,7 +14,7 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 - by_category.mutexes: 互斥体名称
 - by_category.error_messages: 错误消息字符串
 
-每次调用返回一个分片（默认chunk_size=100），如 has_more=true 则需要多次调用。
+每次调用返回一个分片（命令 next 或 chunk=N），如 has_more=true 则需要多次调用。
 你不需要读取所有分片——优先关注可疑类别（URL、注册表、互斥体、PDB）。""",
 
     analysis_dimensions="""请从以下维度进行分析：
@@ -36,62 +36,37 @@ STRING_ARTIFACT_ANALYST_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     - 样本形态：`exe_file_loader`（出现第二个 PE/载荷文件名、MZ 头字符串、无引用的大字节数组）；`dll_plugin`（导出 Install/Start/ServiceMain 类导出）；其余为 `plain_exe`。
     - 每条判定必须附 strings 中的原始证据行；证据不足时填 `unknown`，置信度相应降级，禁止猜测。""",
 
-    output_format=JSON_OUTPUT_RULE.format(json_schema="""{
-  "sample_family_hints": ["基于字符串推断的样本家族线索"],
-  "file_loader_indicators": {
-    "is_file_loader": true/false,
-    "data_filenames": ["文件名列表"],
-    "confidence": "high|medium|low",
-    "reason": "判定理由"
-  },
-  "pdb_analysis": {
-    "project_name": "项目名称或null",
-    "compiler_hint": "编译环境推断",
-    "exposure_level": "high|medium|low"
-  },
-  "key_strings": [
-    {
-      "string": "原始字符串",
-      "category": "密钥|配置|URL|注册表|互斥体|伪装|其他",
-      "severity": "high|medium|low",
-      "evidence": "为什么这个字符串重要"
+    output_format=JSON_OUTPUT_RULE.replace("__JSON_SCHEMA__","""{
+  "sample": {
+    "overall_assessment": "字符串整体评估结论",
+    "arch_detection": {
+      "language": "c_cpp | rust | golang | unknown",
+      "compiler_hints": ["msvc | gcc | mingw | ..."],
+      "packer_protector": ["upx | vmp | themida | none | unknown | ..."],
+      "sample_form": "exe_file_loader | dll_plugin | plain_exe | unknown",
+      "confidence": "high | medium | low",
+      "evidence": ["<每条判定对应的原始字符串证据>"]
     }
-  ],
-  "network_indicators": {
-    "urls": ["URL列表"],
-    "domains": ["域名列表"],
-    "user_agents": ["UA字符串"]
   },
-  "persistence_indicators": {
-    "registry_paths": ["注册表路径"],
-    "service_names": ["服务名"],
-    "scheduled_task_hints": ["计划任务线索"]
-  },
-  "suspicious_patterns": [
+  "findings": [
     {
-      "pattern": "检测到的模式",
-      "risk_level": "high|medium|low",
-      "evidence": "触发的具体字符串"
+      "category": "string | ioc",
+      "name": "原始字符串（URL/文件名/路径/互斥体等，逐字引用）",
+      "details": {
+        "kind": "url | data_file | pdb_path | registry | mutex | key_material | disguise | anomaly | other",
+        "severity": "high | medium | low",
+        "evidence": "为什么这个字符串重要"
+      }
     }
-  ],
-  "overall_assessment": "字符串整体评估结论",
-  "arch_detection": {
-    "language": "c_cpp | rust | golang | unknown",
-    "compiler_hints": ["msvc | gcc | mingw | ..."],
-    "packer_protector": ["upx | vmp | themida | none | unknown | ..."],
-    "sample_form": "exe_file_loader | dll_plugin | plain_exe | unknown",
-    "confidence": "high | medium | low",
-    "evidence": ["<每条判定对应的原始字符串证据>"]
-  },
-  "recommended_next_steps": ["建议的后续分析方向"]
+  ]
 }""") + CONFIDENCE_RULES,
 
     error_control="""- 仅基于实际输入的字符串列表进行判断，不要假设存在未列出的字符串
 - 如果 strings.txt 为空或缺失，返回 status=insufficient_data
 - 数据文件名分析中，仅当明确匹配已知扩展名时才标记
 - 不对缺失的数据进行猜测
-- file_loader_indicators.is_file_loader=true 且 confidence=high → 必须列出 ≥2 个具体的数据文件名作为 evidence.raw_value
-- network_indicators.urls 中每个 URL 必须逐字引用自输入数据，不允许补全协议前缀
-- key_strings 中标记为 severity=high 的项，必须在 evidence 中逐字引用原始字符串
+- details.kind=data_file 且 severity=high → 必须列出 ≥2 个具体的数据文件名作为 evidence
+- details.kind=url 的每个 URL 必须逐字引用自输入数据，不允许补全协议前缀
+- findings 中 severity=high 的项，必须在 evidence 中逐字引用原始字符串
 """,
 )

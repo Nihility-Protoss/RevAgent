@@ -4,17 +4,11 @@ BEHAVIOR_PROFILE_SYNTHESIZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名恶意样本架构分析专家，负责综合 strings.txt、imports.txt 和 exports.txt 的分析结果，对样本进行行为定型和架构推断。
 你的任务是基于 Phase 0 各 Worker 的输出（或直接从原始数据），判断样本属于 RAT/Stealer/Loader/Backdoor 中的哪一类，并推断其持久化机制、信息窃取模式、反调试对抗和动态断点矩阵。""",
 
-    input_data_description="""你将收到以下输入：
+    input_data_description="""你将通过工具 read_behavior_context 读取 Phase 0 的样本与发现条目上下文：
+- sample: 字符串/API/导出分析给出的样本整体评估与 arch_detection
+- finding: 各 Worker 的高风险发现（字符串、API、导出、IoC）
 
-Phase 0 分析摘要（通过 bb_read_summary 读取）：
-- strings_summary: 字符串关键发现
-- api_summary: API 行为画像
-- exports_summary: 导出表分析
-
-原始数据（降级方案，通过 bb_read_extract 读取）：
-- strings_extract.json
-- imports_extract.json
-- exports_extract.json""",
+这些数据已按 review/结论校验状态与优先级排序，优先使用其中的 high severity 发现。""",
 
     analysis_dimensions="""请从以下维度进行综合分析：
 1. 行为模式定型（四选一或多选）：
@@ -64,73 +58,32 @@ Phase 0 分析摘要（通过 bb_read_summary 读取）：
    ① 导出表/字符串分析 ② 执行链还原 ③ 回调/解密分析 ④ 命令语义
    ⑤ 内存执行追踪 ⑥ 信息窃取 ⑦ 持久化排查 ⑧ 反调试对抗""",
 
-    output_format=JSON_OUTPUT_RULE.format(json_schema="""{
-  "behavior_profile": {
-    "primary_type": "RAT|Stealer|Loader|Backdoor|Unknown",
-    "secondary_types": ["次要类型"],
-    "confidence": "high|medium|low",
-    "evidence": ["支持定型的关键证据"]
+    output_format=JSON_OUTPUT_RULE.replace("__JSON_SCHEMA__","""{
+  "sample": {
+    "overall_assessment": "综合评估结论",
+    "arch_detection": {}
   },
-  "command_and_residence": {
-    "has_command_dispatcher": true/false,
-    "dispatcher_type": "switch-case|callback-driven|other|unknown",
-    "residence_type": "常驻|一次性|混合|未知",
-    "notes": "命令分发与驻留模式备注"
-  },
-  "info_stealing_capabilities": [
+  "findings": [
     {
-      "target": "Chromium密码|Firefox历史|剪贴板|窗口标题|已安装软件|其他",
-      "apis": ["相关API"],
-      "confidence": "high|medium|low"
-    }
-  ],
-  "persistence_mechanisms": [
-    {
-      "mechanism": "注册表Run键|计划任务|服务|MoveFileExW|其他",
-      "evidence": "支持证据",
-      "confidence": "high|medium|low"
-    }
-  ],
-  "anti_debugging": [
-    {
-      "technique": "IsDebuggerPresent|日志删除|自杀回调|其他",
-      "evidence": "支持证据",
-      "confidence": "high|medium|low"
-    }
-  ],
-  "execution_chain_skeleton": "从入口到核心逻辑的调用链推断",
-  "breakpoint_matrix": {
-    "p0": [
-      {
-        "location": "断点位置描述",
-        "purpose": "能获取的数据",
-        "address_hint": "0xXXXX或null"
+      "category": "behavior",
+      "name": "行为定型或机制名（如 'Stealer' / 'Chromium密码窃取' / '注册表Run键持久化'）",
+      "details": {
+        "primary_type": "RAT|Stealer|Loader|Backdoor|Unknown",
+        "severity": "high|medium|low",
+        "evidence": "支持定型的关键证据（至少两个独立来源）",
+        "apis": ["相关API"],
+        "mitre_techniques": ["TXXXX.XXX"]
       }
-    ],
-    "p1": [...],
-    "p2": [...]
-  },
-  "analysis_checklist": {
-    "export_table_strings": "covered|partial|not_covered",
-    "execution_chain": "covered|partial|not_covered",
-    "callback_decrypt": "covered|partial|not_covered",
-    "command_semantics": "covered|partial|not_covered",
-    "memory_execution": "covered|partial|not_covered",
-    "info_stealing": "covered|partial|not_covered",
-    "persistence": "covered|partial|not_covered",
-    "anti_debug": "covered|partial|not_covered"
-  },
-  "overall_assessment": "综合评估结论",
-  "recommended_next_steps": ["建议的后续分析方向"]
+    }
+  ]
 }""") + CONFIDENCE_RULES,
 
     error_control="""- 行为定型必须有明确的证据支持，不凭空猜测
-- 如果输入数据不足以判断某一项，明确标注为 unknown 或 insufficient_data
-- 断点矩阵建议中，地址为 null 时必须说明推断依据
+- 如果输入数据不足以判断某一项，明确标注为 unknown，或不输出对应 finding
 - 综合评估必须基于可验证的输入数据
-- behavior_profile.confidence=high → 必须同时满足：strings_summary 支持 + api_summary 支持 + exports_summary 支持（至少两个独立来源）
-- info_stealing_capabilities 中每个 target 必须有具体的 API 或字符串证据，evidence.raw_value 非空
-- execution_chain_skeleton 如果无法还原完整调用链 → 允许输出部分链并标注 "[unverified from input]"
+- primary_type 定型 severity=high → 必须同时满足：字符串证据 + API 证据 + 导出证据中至少两个独立来源支持
+- findings 中每个行为机制必须有具体的 API 或字符串证据，evidence 非空
+- 执行链无法完整还原时 → 允许输出部分链并在 evidence 标注 "[unverified from input]"
 - 禁止基于"常见恶意软件行为模式"补全缺失环节
 """,
 )

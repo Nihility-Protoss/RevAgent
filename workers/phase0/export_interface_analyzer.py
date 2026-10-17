@@ -4,13 +4,13 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
     role_definition=DATA_SUFFICIENCY_RULE + "\n\n" + """你是一名 Windows PE 导出表分析专家，专注于通过分析 exports.txt 和 function_index.txt 来识别样本的加载方式、命令接口和潜在恶意特征。
 对于 DLL 插件型样本，导出表是理解其初始化方式和命令分发机制的关键。""",
 
-    input_data_description="""你将通过工具 bb_read_extract 读取预提取的结构化导出数据（exports_extract.json）。
+    input_data_description="""你将通过工具 read_export_data 读取预提取的结构化导出数据（exports_extract.json）。
 包含：
 - exports: 导出函数列表（address, name）
 - ordinal_mapping: ordinal 映射
 
 辅助信息：
-- functions_extract.json 中的函数信息""",
+- read_function_index_data 读取 functions_extract.json 中的函数信息""",
 
     analysis_dimensions="""请从以下维度进行分析：
 1. Ordinal 映射表完整性：列出所有导出 ordinal 及对应地址，标注反编译状态
@@ -38,58 +38,30 @@ EXPORT_INTERFACE_ANALYZER_INSTRUCTION = FIVE_SECTION_TEMPLATE.format(
 
 若分析过程中发现与编译语言、加壳/保护方式或样本形态（EXE 文件加载型 / DLL 插件型）相关的证据（如异常稀疏的导入表、Install/ServiceMain 类导出、保护壳特征 API），请在结论的相应字段或 notes 中注明并附证据；无需输出独立结构。""",
 
-    output_format=JSON_OUTPUT_RULE.format(json_schema="""{
-  "loading_pattern": {
-    "pattern_type": "标准插件型|反射加载|侧加载|宿主Patch|未知",
-    "confidence": "high|medium|low",
-    "evidence": ["支持证据"]
+    output_format=JSON_OUTPUT_RULE.replace("__JSON_SCHEMA__","""{
+  "sample": {
+    "overall_assessment": "导出表整体评估结论",
+    "arch_detection": {}
   },
-  "ordinal_mapping": [
+  "findings": [
     {
-      "ordinal": 1,
-      "name": "函数名",
-      "address": "0xXXXX",
-      "likely_role": "初始化|命令分发|回调注册|其他"
+      "category": "export | behavior",
+      "name": "导出函数名或加载方式判定（如 'DllMain' / '反射加载'）",
+      "details": {
+        "address": "0xXXXX或null",
+        "loading_pattern": "标准插件型|反射加载|侧加载|宿主Patch|未知",
+        "likely_role": "初始化|命令分发|回调注册|TLS回调|其他",
+        "severity": "high|medium|low",
+        "evidence": "支持证据"
+      }
     }
-  ],
-  "tls_callback_analysis": {
-    "has_tls_callback": true/false,
-    "suspicious": true/false,
-    "assessment": "TLS回调分析结论"
-  },
-  "packer_indicators": [
-    {
-      "indicator": "加壳迹象描述",
-      "confidence": "high|medium|low",
-      "evidence": "具体证据"
-    }
-  ],
-  "suspicious_exports": [
-    {
-      "name": "导出函数名",
-      "address": "0xXXXX",
-      "assessment": "分析结论"
-    }
-  ],
-  "command_dispatcher_inference": {
-    "has_command_dispatcher": true/false,
-    "dispatcher_ordinal": "ordinal号或null",
-    "cmd_offset_semantics": "如: +0x06=cmd_id",
-    "confidence": "high|medium|low"
-  },
-  "callback_architecture": {
-    "main_callback_addr": "0xXXXX或null",
-    "string_callback_addr": "0xXXXX或null",
-    "file_callback_addr": "0xXXXX或null",
-    "notes": "回调架构推断备注"
-  },
-  "overall_assessment": "导出表整体评估结论"
+  ]
 }""") + CONFIDENCE_RULES,
 
-    error_control="""- 加载方式判定中，confidence=high 仅当有明确的 ordinal 数量和命名模式支持
+    error_control="""- 加载方式判定中，severity=high 仅当有明确的 ordinal 数量和命名模式支持
 - 不对缺失的导出函数进行猜测
-- 如果 exports.txt 为空或缺失，返回 loading_pattern=未知
-- tls_callback_analysis.has_tls_callback=true → 必须在 exports 或 function_index 中明确发现 TlsCallback 相关符号
-- packer_indicators 中每个 indicator 的 confidence=high → 必须列出具体的节名/入口点地址/entropy 值
+- 如果 exports.txt 为空或缺失，返回 status=insufficient_data
+- details.likely_role=TLS回调 → 必须在 exports 或 function_index 中明确发现 TlsCallback 相关符号
+- 加壳迹象 severity=high → 必须列出具体的节名/入口点地址/entropy 值
 """,
 )

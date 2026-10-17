@@ -2,8 +2,8 @@
 """
 import json
 import os
-from datetime import datetime, timezone
 from typing import Any, Optional
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
@@ -14,6 +14,7 @@ from langchain_core.runnables import RunnableConfig
 
 from config import cfg, cfg_int
 from state import AnalysisState
+from tools.agent_tools import get_agent_tools
 from tools.blackboard_tools import (
     _now_iso,
     bb_checkpoint,
@@ -27,6 +28,7 @@ from tools.blackboard_tools import (
     board_path,
     load_function_data,
 )
+from tools.entry_tools import bb_get_runtime, bb_set_runtime, bb_write_worker_output
 from tools.file_loaders import detect_sample_type, pre_extract_sample
 from workers.extractor import build_extraction_prompt
 from workers.knowledge import KNOWLEDGE_REGISTRY, load_knowledge, match_guides
@@ -153,16 +155,6 @@ def parse_json_loose(text: Any) -> dict:
         return {"status": "parse_failed", "raw": text, "parse_error": True}
 
 
-# output_key -> (artifact_type, artifact 文件名前缀)
-_ARTIFACT_TYPES = {
-    "string_analysis": ("strings", "p0"),
-    "api_behavior_analysis": ("api", "p0"),
-    "export_interface_analysis": ("exports", "p0"),
-    "behavior_profile": ("behavior", "p1"),
-    "function_boundary_analysis": ("functions", "p1"),
-}
-
-
 async def run_extraction(
     artifact: dict,
     artifact_type: str,
@@ -188,39 +180,64 @@ async def run_extraction(
     return data
 
 
-# === Worker 节点工厂（替代 ADK LlmAgent + output_key）===
+# === Worker 节点工厂（统一 WorkerOutput 投影） ===
+
+
+def _resolve_run_id(state: AnalysisState) -> str:
+    """解析当前运行的 run_id：优先图状态，其次黑板 runtime，最后生成并持久化。"""
+    project = state["sample_project_name"]
+    run_id = state.get("run_id") or bb_get_runtime("run_id", project)
+    if not run_id:
+        run_id = f"run-{uuid4().hex[:8]}"
+        bb_set_runtime("run_id", run_id, project)
+    return run_id
+
 
 def make_worker_node(spec: WorkerSpec, llm=None):
     """把一个 WorkerSpec 编译为 LangGraph 节点函数。
+
+    Agent 按 ``(project_name, run_id, export_dir, tool_mode)`` 创建并缓存；
+    工具集来自 ``get_agent_tools(spec.name, ...)`` 按角色动态注入。
+    结构化输出（WorkerOutput）经 ``bb_write_worker_output`` 投影为版本化条目，
+    写入幂等键为 ``{run_id}:{phase}:{worker_name}:{subject_key}``；
+    节点返回 ``{}``，不再向图状态写 output_key payload。
     """
     _cache: dict = {}
 
-    def _agent():
-        if "agent" not in _cache:
-            _cache["model"] = llm or get_llm()
-            _cache["agent"] = create_agent(
-                model=_cache["model"],
-                tools=list(spec.tools),
+    def _agent(project_name: str, run_id: str, export_dir: str, tool_mode: str):
+        key = (project_name, run_id, export_dir, tool_mode)
+        if key not in _cache:
+            model = llm or get_llm()
+            _cache[key] = create_agent(
+                model=model,
+                tools=get_agent_tools(
+                    spec.name, project_name, run_id, export_dir, mode=tool_mode
+                ),
                 system_prompt=spec.instruction,
                 response_format=spec.output_schema,
                 # ReAct 历史接近上下文上限（128k 的 75%）时自动摘要压缩
                 middleware=[
                     SummarizationMiddleware(
-                        _cache["model"],
+                        model,
                         trigger=("tokens", _summary_trigger_tokens()),
                         keep=("messages", 20),
                     )
                 ],
             )
-        return _cache["agent"]
+        return _cache[key]
 
     async def node(state: AnalysisState, config: RunnableConfig = None) -> dict:
         project = state["sample_project_name"]
+        export_dir = state.get("sample_export_dir", "")
+        run_id = _resolve_run_id(state)
+        tool_mode = state.get("tool_mode") or cfg("agents.tool_mode", default="minimal")
         task = (
             f"分析样本: {project}, "
-            f"导出目录: {state.get('sample_export_dir', '')}"
+            f"导出目录: {export_dir}"
         )
-        result = await _agent().ainvoke({"messages": [("user", task)]}, config=config)
+        result = await _agent(project, run_id, export_dir, tool_mode).ainvoke(
+            {"messages": [("user", task)]}, config=config
+        )
         structured = result.get("structured_response")
         if structured is not None:
             payload = (
@@ -229,15 +246,15 @@ def make_worker_node(spec: WorkerSpec, llm=None):
         else:
             payload = parse_json_loose(result["messages"][-1].content)
 
-        type_info = _ARTIFACT_TYPES.get(spec.output_key)
-        if type_info and isinstance(payload, dict):
-            artifact_type, prefix = type_info
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            bb_write_artifact(f"{prefix}_{spec.name}_{timestamp}", payload, project)
-            await run_extraction(
-                payload, artifact_type, f"{artifact_type}_summary", project, _cache["model"], config
+        if isinstance(payload, dict):
+            bb_write_worker_output(spec.name, payload, project, run_id)
+        else:
+            bb_log_event(
+                "worker_output_invalid",
+                {"worker": spec.name, "type": type(payload).__name__},
+                project,
             )
-        return {spec.output_key: payload}
+        return {}
 
     node.__name__ = spec.name
     return node

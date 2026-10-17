@@ -24,8 +24,10 @@ from tools.entry_models import (
     ReviewStatus,
     SubjectKind,
     SubjectValidationStatus,
+    WorkerOutput,
     enum_to_int,
     enum_to_name,
+    normalize_asm_address,
 )
 from tools.entry_store import StoreError, get_store, utc_now
 
@@ -602,3 +604,255 @@ def bb_log_event(event_type, details, project_name) -> dict:
     log.append({"event_type": event_type, "details": details, "at": utc_now()})
     store.set_runtime("execution_log", log)
     return {"status": "success"}
+
+
+# ---------- Worker 统一产物投影 ----------
+
+
+# worker 名 → 所属阶段（用于幂等键与 producer.phase）
+_WORKER_PHASES = {
+    "string_artifact_analyst": "phase0",
+    "api_behavior_profiler": "phase0",
+    "export_interface_analyzer": "phase0",
+    "behavior_profile_synthesizer": "phase1",
+    "function_boundary_detector": "phase1",
+    "scheduler": "phase2",
+}
+
+# 样本/发现 Worker：共用样本+发现投影器
+_SAMPLE_FINDING_WORKERS = {
+    "string_artifact_analyst",
+    "api_behavior_profiler",
+    "export_interface_analyzer",
+    "behavior_profile_synthesizer",
+}
+
+# finding.category → subject.kind 映射
+_FINDING_KIND_MAP = {
+    "string": SubjectKind.STRING,
+    "api": SubjectKind.API,
+    "export": SubjectKind.EXPORT,
+    "behavior": SubjectKind.BEHAVIOR,
+    "ioc": SubjectKind.IOC,
+}
+
+
+def _idempotency_key(run_id: str, phase: str, worker_name: str, subject_key: str) -> str:
+    """统一幂等键公式：``{run_id}:{phase}:{worker_name}:{subject_key}``。
+
+    full 模式 Agent 主动写入与框架兜底投影必须使用同一公式，避免重复追加。
+    """
+    return f"{run_id}:{phase}:{worker_name}:{subject_key}"
+
+
+def _find_subject_entry_id(store, subject_kind, subject_key) -> Optional[str]:
+    """按 (kind, 规范化 key) 在主题索引中查找既有条目。"""
+    kind_int = enum_to_int(SubjectKind, subject_kind)
+    key = store._normalize_subject_key(kind_int, subject_key)
+    return store.subject_index.get((kind_int, key))
+
+
+def _upsert_analysis(
+    project_name: str,
+    run_id: str,
+    phase: str,
+    worker_name: str,
+    entry_type,
+    subject_kind,
+    subject_key: str,
+    output: dict,
+) -> dict:
+    """按主题 upsert 分析版本：先查幂等键（重放 → written=0），否则创建或追加。
+
+    ``output`` 为 EntryVersion 的写入字段子集（conclusion/payload/confidence/
+    evidence_refs/annotations/relation_refs）。追加时以 head 为基版，
+    change_reason=analysis。
+    """
+    key = _idempotency_key(run_id, phase, worker_name, subject_key)
+    producer = {"phase": phase, "agent": worker_name, "run_id": run_id}
+    found = bb_find_operation(key, project_name)
+    if found.get("data"):
+        ref = found["data"]
+        return {"written": 0, "ref": {"entry_id": ref["entry_id"], "version": ref["version"]}}
+
+    store = get_store(project_name)
+    entry_id = _find_subject_entry_id(store, subject_kind, subject_key)
+    if entry_id is None:
+        created = bb_create_entry(
+            entry_type, subject_kind, subject_key, output, producer,
+            project_name, key,
+        )
+        data = created["data"]
+        return {"written": 1, "ref": {"entry_id": data["entry_id"], "version": data["head_version"]}}
+
+    entry = store.get_entry(entry_id)
+    appended = bb_append_version(
+        entry_id, entry.head_version, dict(output), producer,
+        project_name, key, change_reason="analysis",
+    )
+    return {
+        "written": 1,
+        "ref": {"entry_id": entry_id, "version": appended["data"]["head_version"]},
+    }
+
+
+def _project_sample_findings(worker_output: WorkerOutput, worker_name: str,
+                             project_name: str, run_id: str, phase: str) -> dict:
+    """样本/发现投影器：可选 upsert 一个 sample，再逐项创建 finding。
+
+    存在 sample 时，每个 finding 的 relation_refs 指向该 sample 的当前精确版本。
+    """
+    payload = worker_output.payload or {}
+    refs: List[dict] = []
+    written = 0
+    base_output = {
+        "conclusion": worker_output.conclusion,
+        "confidence": worker_output.confidence,
+        "evidence_refs": list(worker_output.evidence_refs),
+        "annotations": dict(worker_output.annotations),
+    }
+
+    sample = payload.get("sample")
+    if sample:
+        result = _upsert_analysis(
+            project_name, run_id, phase, worker_name,
+            EntryType.SAMPLE, SubjectKind.SAMPLE, "sample",
+            {**base_output, "payload": sample, "relation_refs": []},
+        )
+        written += result["written"]
+        refs.append(result["ref"])
+
+    sample_ref = refs[0] if refs else None
+    for finding in payload.get("findings") or []:
+        category = str(finding.get("category", "")).strip().lower()
+        kind = _FINDING_KIND_MAP.get(category)
+        if kind is None:
+            raise ValueError(f"未知发现类别: {category}")
+        name = str(finding.get("name", "")).strip()
+        finding_payload = {
+            "category": category,
+            "name": name,
+            "details": finding.get("details") or {},
+        }
+        result = _upsert_analysis(
+            project_name, run_id, phase, worker_name,
+            EntryType.FINDING, kind, f"{category}:{name}",
+            {
+                **base_output,
+                "payload": finding_payload,
+                "relation_refs": [dict(sample_ref)] if sample_ref else [],
+            },
+        )
+        written += result["written"]
+        refs.append(result["ref"])
+    return {"written": written, "refs": refs}
+
+
+def _project_candidates(worker_output: WorkerOutput, worker_name: str,
+                        project_name: str, run_id: str, phase: str) -> dict:
+    """函数筛选投影器：每个候选按规范化 func_addr upsert function 条目。
+
+    候选的 ``analysis_priority`` 映射到存储字段 ``payload.candidate.priority``。
+    """
+    payload = worker_output.payload or {}
+    refs: List[dict] = []
+    written = 0
+    for candidate in payload.get("candidates") or []:
+        addr = normalize_asm_address(str(candidate.get("func_addr", "")))
+        func_payload = {
+            "func_name": candidate.get("func_name", ""),
+            "candidate": {
+                "priority": int(candidate.get("analysis_priority", 0)),
+                "priority_reason": candidate.get("priority_reason", ""),
+                "size": int(candidate.get("size", 0)),
+                "xrefs": int(candidate.get("xrefs", 0)),
+                "is_thunk": bool(candidate.get("is_thunk", False)),
+                "is_export": bool(candidate.get("is_export", False)),
+            },
+        }
+        result = _upsert_analysis(
+            project_name, run_id, phase, worker_name,
+            EntryType.FUNCTION, SubjectKind.ASM_ADDRESS, addr,
+            {
+                "conclusion": worker_output.conclusion,
+                "confidence": worker_output.confidence,
+                "payload": func_payload,
+                "evidence_refs": list(worker_output.evidence_refs),
+                "annotations": dict(worker_output.annotations),
+                "relation_refs": [],
+            },
+        )
+        written += result["written"]
+        refs.append(result["ref"])
+    return {"written": written, "refs": refs}
+
+
+def _project_scheduler(worker_output: WorkerOutput, worker_name: str,
+                       project_name: str, run_id: str, phase: str) -> dict:
+    """调度投影器：decision 条目（subject.key="phase2"），地址经主题索引解析为精确版本引用。"""
+    payload = worker_output.payload or {}
+    store = get_store(project_name)
+    selected_refs: List[dict] = []
+    for addr in payload.get("selected_addresses") or []:
+        normalized = normalize_asm_address(str(addr))
+        entry_id = _find_subject_entry_id(store, SubjectKind.ASM_ADDRESS, normalized)
+        if entry_id is None:
+            raise ValueError(f"selected_address 未找到对应函数条目: {addr}")
+        entry = store.get_entry(entry_id)
+        selected_refs.append({"entry_id": entry_id, "version": entry.head_version})
+    decision_payload = {
+        "action": payload.get("action", ""),
+        "selected_function_refs": selected_refs,
+        "summary": payload.get("summary") or {},
+    }
+    result = _upsert_analysis(
+        project_name, run_id, phase, worker_name,
+        EntryType.DECISION, SubjectKind.DECISION, "phase2",
+        {
+            "conclusion": worker_output.conclusion,
+            "confidence": worker_output.confidence,
+            "payload": decision_payload,
+            "evidence_refs": list(worker_output.evidence_refs),
+            "annotations": dict(worker_output.annotations),
+            "relation_refs": [],
+        },
+    )
+    return {"written": result["written"], "refs": [result["ref"]]}
+
+
+@_wrap
+def bb_write_worker_output(worker_name, output, project_name, run_id) -> dict:
+    """把 Worker 的统一产物（WorkerOutput）投影为版本化条目。
+
+    先校验 ``WorkerOutput``；只有 ``status=success`` 才执行投影：
+    - ``parse_failed`` → 返回 error 且不写任何条目
+    - ``insufficient_data`` → written=0，并记录 runtime 数据不足事件
+
+    所有写入使用幂等键 ``{run_id}:{phase}:{worker_name}:{subject_key}``。
+    """
+    worker_name = str(worker_name)
+    phase = _WORKER_PHASES.get(worker_name)
+    if phase is None:
+        raise ValueError(f"未知 worker: {worker_name}")
+
+    validated = WorkerOutput.model_validate(output)
+    if validated.status == "parse_failed":
+        return {
+            "status": "error", "reason": "parse_failed",
+            "error": validated.conclusion or "worker 解析失败", "written": 0,
+        }
+    if validated.status == "insufficient_data":
+        bb_log_event(
+            "worker_insufficient_data",
+            {"worker": worker_name, "phase": phase, "conclusion": validated.conclusion},
+            project_name,
+        )
+        return {"status": "success", "written": 0, "refs": []}
+
+    if worker_name in _SAMPLE_FINDING_WORKERS:
+        result = _project_sample_findings(validated, worker_name, project_name, run_id, phase)
+    elif worker_name == "function_boundary_detector":
+        result = _project_candidates(validated, worker_name, project_name, run_id, phase)
+    else:  # scheduler
+        result = _project_scheduler(validated, worker_name, project_name, run_id, phase)
+    return {"status": "success", **result}
