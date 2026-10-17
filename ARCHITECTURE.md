@@ -35,7 +35,7 @@ analyst           profiler          analyzer
   │                  │                  │
   └──────────────────┼──────────────────┘
                      ▼
-resolve_guides（知识路由：arch_detection → meta/active_guides.json）
+resolve_guides（知识路由：arch_detection → 条目库 runtime 激活指南）
                      │
                      ▼
 Phase 1: Deep Swarm（并行扇出）
@@ -46,20 +46,21 @@ synthesizer                    detector
   │                                     │
   └──────────────────┬──────────────────┘
                      ▼
-scheduler（读取 5 个 summary → scheduler_decision）
+scheduler（经 bb_build_context 读取 Phase 0/1 条目 → 投影为 scheduler_decision 条目）
                      │
                      ▼
-approval_gate（HITL：CLI input()，CONFIRM / MODIFY addr,...；3 次无效默认 CONFIRM）
+approval_gate（HITL：CLI input()，CONFIRM / MODIFY addr,...；3 次无效默认 CONFIRM；
+                     人工决定经 bb_review_entries 落盘为 review 版本）
                      │
                      ▼
-phase3_deep_analysis（节点内串行循环：逐函数 llm.ainvoke，bb_has_artifact 幂等跳过，
+phase3_deep_analysis（节点内串行循环：逐函数 llm.ainvoke，幂等键跳过已完成函数，
                      每个函数完成后 bb_checkpoint）
                      │
                      ▼
 shard_synthesis（Map：每 5 个可疑函数一片，串行分片为小模型稳定性保留）
                      │
                      ▼
-aggregator（Reduce：汇总 shard_reports → summary/p4_final_report）
+aggregator（Reduce：经条目库读取全部分析产物 → 最终报告条目，id 写入 final_report_entry_id）
                      │
                      ▼
 END
@@ -102,7 +103,7 @@ return builder.compile(checkpointer=checkpointer)
 
 ## 3. Worker Agent 设计
 
-Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`WorkerSpec` frozen dataclass**（`name` / `instruction` / `tools` / `output_key` / `output_schema`），由 `graph_nodes.make_worker_node` 编译为 LangGraph 节点函数。节点内通过 `langchain.agents.create_agent` 构建 ReAct Agent（`response_format=output_schema` 结构化输出，失败时回退 `parse_json_loose` 容错解析），完成后在同一节点内调用 `bb_write_artifact` 落盘 artifact 并运行 extractor 提炼 summary。
+Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`WorkerSpec` frozen dataclass**（`name` / `instruction` / `output_schema`），由 `graph_nodes.make_worker_node` 编译为 LangGraph 节点函数。节点内通过 `langchain.agents.create_agent` 构建 ReAct Agent（`response_format=output_schema` 结构化输出，失败时回退 `parse_json_loose` 容错解析），完成后在同一节点内经 `bb_write_worker_output` 把结构化输出**投影为版本化条目**（样本级发现、函数候选、调度决策等），Worker 节点一律返回 `{}`，分析产物不回流图状态。
 
 提示词仍使用统一的**五段式提示词结构**（常量保留在各 `workers/phaseX/*.py` 原模块，文本未改）：
 1. **角色定义段**：专业身份和分析范围
@@ -113,29 +114,29 @@ Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`
 
 ### 3.1 Phase 0: Triage Swarm（快速定性）
 
-| Worker | 职责 | 输出键（state 字段） | 最小工具集 |
+| Worker | 职责 | 产物投影（state 不落原文） | minimal 工具集 |
 |-------|------|--------------------|-----------|
-| `string_artifact_analyst` | 分析 `strings.txt`，提取数据文件名、PDB路径、密钥、URL、注册表路径、互斥体名、伪装信息等；含 `arch_detection` 子结构 | `string_analysis` | `bb_read_extract`, `load_strings` |
-| `api_behavior_profiler` | 分析 `imports.txt`，识别 API 组合、MITRE 映射、DLL依赖、API哈希动态解析迹象 | `api_behavior_analysis` | `bb_read_extract`, `load_imports`, `load_strings` |
-| `export_interface_analyzer` | 分析 `exports.txt`，建立 ordinal 映射、判定加载方式、识别命令接口 | `export_interface_analysis` | `bb_read_extract`, `load_exports`, `load_function_index` |
+| `string_artifact_analyst` | 分析 `strings.txt`，提取数据文件名、PDB路径、密钥、URL、注册表路径、互斥体名、伪装信息等；含 `arch_detection` 子结构 | 样本级发现条目 | `read_strings_data` |
+| `api_behavior_profiler` | 分析 `imports.txt`，识别 API 组合、MITRE 映射、DLL依赖、API哈希动态解析迹象 | 样本级发现条目 | `read_api_data`, `read_strings_data` |
+| `export_interface_analyzer` | 分析 `exports.txt`，建立 ordinal 映射、判定加载方式、识别命令接口 | 样本级发现条目 | `read_export_data`, `read_function_index_data` |
 
 ### 3.2 Phase 1: Deep Swarm（行为定型+函数筛选）
 
-| Worker | 职责 | 输出键（state 字段） | 最小工具集 |
+| Worker | 职责 | 产物投影（state 不落原文） | minimal 工具集 |
 |-------|------|--------------------|-----------|
-| `behavior_profile_synthesizer` | 综合 Phase 0 摘要，定型 RAT/Stealer/Loader/Backdoor，推断持久化/窃取/反调试/断点矩阵 | `behavior_profile` | `bb_read_summary` |
-| `function_boundary_detector` | 评估 `function_index.txt`，排序候选函数，排除 thunk，推荐 Top 20 | `function_boundary_analysis` | `bb_read_extract`, `load_function_index`, `load_exports`, `load_arch_guide` |
+| `behavior_profile_synthesizer` | 综合 Phase 0 条目，定型 RAT/Stealer/Loader/Backdoor，推断持久化/窃取/反调试/断点矩阵 | 行为定型条目 | `read_behavior_context` |
+| `function_boundary_detector` | 评估 `function_index.txt`，排序候选函数，排除 thunk，推荐 Top 20 | 函数候选条目 | `read_function_index_data`, `read_export_data`, `read_arch_guide` |
 
-- **`output_schema` 化**：`string_analysis` 与 `function_boundary_analysis` 已声明 Pydantic 模型（`state.py` 的 `StringAnalysis` / `FunctionBoundaryAnalysis`），根治了 JSON 字符串状态问题；其余 Worker 暂为自由 dict。
+- **`output_schema` 化**：全部 Worker 统一输出 `tools/entry_models.py` 的 `WorkerOutput`（结构化数据充足性声明 + 规范化 payload），根治了 JSON 字符串状态问题。
 - **行为定型关键产出**: P0/P1/P2 断点矩阵建议、8步分析 checklist 完成状态
 - **函数排序维度**: xrefs 调用频率、thunk 排除、函数大小、入口点 proximity、命名暗示、导出函数优先
 
 ### 3.3 Phase 2: Scheduler + HITL
 
 #### Scheduler Agent
-- **职责**: 中央协调器，读取 5 个 summary，整合摘要，输出决策
+- **职责**: 中央协调器，经 `read_scheduler_context` 读取 Phase 0/1 条目构建的上下文，输出决策
 - **定义**: `workers/phase2/scheduler.py` 的 `SCHEDULER_INSTRUCTION`，`workers/specs.py` 的 `scheduler` spec
-- **输出键**: `scheduler_decision`
+- **产物投影**: 经 `bb_write_worker_output` 投影为 `scheduler_decision` 条目（HITL 与 Phase 3 读取）
 - **规则**: 只做数据路由和状态管理，不做样本分析推理
 
 #### Human Review Gate（approval_gate）
@@ -143,17 +144,18 @@ Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`
 - **位置**: `graph_nodes.py` 的 `approval_gate_node` 节点（Phase 2→3 之间）
 - **触发时机**: Scheduler 完成后
 - **交互方式**: CLI `input()` 逐行读取人工回复（`prompt_human` 为模块级函数，便于测试 monkeypatch）；LangGraph `interrupt()` 化留待 Step 2
-- **审查内容**: 行为定型结论、高风险字符串/API 指标计数、Top 20 候选函数
+- **审查内容**: 行为定型结论、高风险字符串/API 指标计数、Top 20 候选函数（由条目库读取并渲染）
 - **回复协议**:
   - `CONFIRM` — 同意继续，使用推荐候选函数（`analysis_priority >= 7` 的 Top 20）
   - `MODIFY <addr1>,<addr2>,...` — 指定要分析的函数地址列表，逗号分隔
   - 连续 3 次无法识别的回复后默认按 CONFIRM 放行
-- **写入 state**: `phase2_human_decision`（str）、`human_approved_functions`（list[str]，MODIFY 时）
+- **HITL 版本审查**: 人工决定不直接改条目内容，而是经 `bb_review_entries` 追加 review 版本（携带 `ReviewStatus`、reviewer、note），保留原始 Worker 结论与人工裁定的完整审计链；不存在的地址记入 decision payload 的 `unknown_addresses`，不创建函数条目。
+- **写入 state**: 无——人工决定经 `bb_review_entries` 落盘为条目的 review 版本（`approved` / `modified`），Phase 3 从 review 后的决策条目读取选定函数
 
 ### 3.4 知识指南注入（Phase 0→1 门控）
 
 - **来源**: Phase 0 字符串分析输出 `arch_detection`（架构/语言/加载方式）。
-- **路由**: `graph_nodes.resolve_guides_node` / `resolve_active_guides` 读取图状态中 `string_analysis.arch_detection`，匹配 `workers/knowledge/` 知识库，将激活的指南元数据写入 `meta/active_guides.json`。
+- **路由**: `graph_nodes.resolve_guides_node` / `resolve_active_guides` 读取 Worker 输出中的 `arch_detection`，匹配 `workers/knowledge/` 知识库，将激活的指南元数据写入条目库 runtime（`bb_set_runtime`）。
 - **消费**: Phase 1 经 `load_arch_guide("__active__")` 按需加载激活指南并注入 prompt；Phase 3 由 `_load_active_guides_text` 拼接全文注入函数分析 prompt。
 - **默认回退**: `arch_detection` 缺失时回退到默认指南 `windows_pe`。
 
@@ -161,22 +163,30 @@ Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`
 
 ## 4. FunctionTool 清单
 
-Worker 的工具面从旧的 ALL_TOOLS 全量注入收敛为每个 WorkerSpec 声明的 2–4 个最小工具：
+Worker 的工具面从旧的 ALL_TOOLS 全量注入收敛为**按角色与模式装配**（`tools/agent_tools.py` 的 `get_agent_tools(role, project, run_id, export_dir, mode)`，模式由 `config.yaml` 的 `agents.tool_mode` 控制，默认 `minimal`）：
+
+| 模式 | 工具面 | 说明 |
+|------|--------|------|
+| **minimal** | 每角色固定最小读取工具集（`MINIMAL_ROLE_TOOLS`） | 低模型能力友好：固定文法命令（`next` / `key=value`），签名只有 `command: str`，错误返回携带 `expected_examples` |
+| **full** | 通用条目操作工具（读取/历史/查询/上下文/创建/追加/验证） | 供高能力模型主动写入；不暴露 `bb_review_entries` / `bb_flush_store` / `bb_set_runtime` / `bb_checkpoint` |
+
+minimal 模式工具（`make_minimal_tools` 生成，闭包预绑定项目/run/导出目录，预提取 JSON 缺失时兜底读原始 `strings.txt` 等）：
 
 | 工具名 | 功能 | Worker 使用者 |
 |-------|------|-------------|
-| `load_strings` | 加载并分类 `strings.txt` | String Analyst, API Profiler |
-| `load_exports` | 加载 `exports.txt`，构建 ordinal 映射 | Export Analyzer, Function Detector |
-| `load_imports` | 加载 `imports.txt`，API 分类 | API Profiler |
-| `load_function_index` | 加载 `function_index.txt` | Export Analyzer, Function Detector |
-| `bb_read_extract` | 读取黑板 `extracts/` 预提取分片 | 全部 Phase 0/1 Worker |
-| `bb_read_summary` | 读取黑板 `summary/` 摘要 | Behavior Synthesizer, Scheduler |
-| `load_arch_guide` | 加载知识指南（`load_knowledge` 的别名工具） | Function Detector |
-| `load_pe_info` | 加载预生成的 `pe_info.json` | —（预留） |
-| `detect_sample_type` | 基于导出文件判断样本类型 | `pre_extract` 节点直接调用（非 Worker 工具） |
-| `calculate_entropy` | 计算 Shannon 熵 | —（预留） |
+| `read_strings_data` | 读取 strings 预提取分片（兜底 `strings.txt` 分类） | String Analyst, API Profiler |
+| `read_api_data` | 读取 imports 预提取分片（兜底 `imports.txt`） | API Profiler |
+| `read_export_data` | 读取 exports 预提取分片（兜底 `exports.txt`，ordinal 映射） | Export Analyzer, Function Detector |
+| `read_function_index_data` | 读取函数索引预提取分片（兜底 `function_index.txt`） | Export Analyzer, Function Detector |
+| `read_behavior_context` | 经 `bb_build_context` 读取 Phase 0 条目上下文 | Behavior Synthesizer |
+| `read_scheduler_context` | 经 `bb_build_context` 读取 Phase 0/1 条目上下文 | Scheduler |
+| `read_arch_guide` | 加载知识指南（`load_knowledge` 的别名工具） | Function Detector |
 
-> 黑板写入类工具（`bb_write_artifact` / `bb_write_summary` / `bb_checkpoint` / `bb_log_event` / `load_function_data`）不暴露给 Worker Agent，由节点函数（`make_worker_node` / `make_phase3_node` / Phase 4 节点）在 LLM 调用之外直接调用，负责 artifact/summary 持久化与断点。
+full 模式另含：`bb_get_entry` / `bb_get_entry_history` / `bb_query_entries` / `bb_build_context` / `bb_create_entry` / `bb_append_version` / `bb_validate_entry` / `bb_find_operation`。
+
+> 其余工具（`load_pe_info` / `detect_sample_type` / `calculate_entropy` / `bb_read_extract`）保留在 `tools/` 中，由图节点直接调用，不暴露给 Worker Agent。
+
+> 写入类工具与 `load_function_data` 不暴露给 Worker Agent，由节点函数（`make_worker_node` / `make_phase3_node` / Phase 4 节点）在 LLM 调用之外直接调用，负责条目投影、版本追加、人工 review 与断点。
 
 ### 4.1 输入数据规范
 
@@ -202,9 +212,7 @@ Agent 接收一个**样本导出目录**作为输入：
 
 ### 5.1 AnalysisState 字段规范
 
-图状态定义在 `state.py` 的 `AnalysisState(TypedDict, total=False)`。只放小结构 + 黑板引用，不放 artifact 原文。
-
-**初始化参数**（由 `main.py` 构造）：
+图状态定义在 `state.py` 的 `AnalysisState(TypedDict, total=False)`。**只保留六个控制字段**，所有分析产物经条目黑板（`data/output/{project}/entries/`）通信：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -212,27 +220,17 @@ Agent 接收一个**样本导出目录**作为输入：
 | `sample_export_dir` | str | IDA 导出目录路径（默认由 `data/input/` 下的 `*_export_for_ai` 自动解析） |
 | `sample_type` | str | 样本类型（永远 auto：由 `pre_extract` 节点调 `detect_sample_type` 判定后写入） |
 | `resume` | bool | True 时 pre_extract 节点跳过（黑板已有 checkpoint） |
+| `run_id` | str | 由 `pre_extract` 节点生成并经 `bb_set_runtime` 持久化到条目库 runtime |
+| `final_report_entry_id` | str | Phase 4 reduce 节点写入的最终报告条目 id |
 
-**Worker 结构化输出**（WorkerSpec `output_key` 同名直译，dict 或 Pydantic model_dump）：
+**Worker 产物**不落 state：节点内经 `bb_write_worker_output` 投影为版本化条目（样本级发现、函数候选、行为定型、调度决策），下游节点经 `bb_build_context` / `bb_query_entries` 按需读取；Phase 3 结果以深度分析条目版本追加；HITL 决定以 review 版本落盘；Phase 4 reduce 只回写 `final_report_entry_id`。
 
-| 字段 | 写入节点 | 读取者 |
-|------|---------|--------|
-| `string_analysis` | string_artifact_analyst | resolve_guides、approval_gate、Phase 4 |
-| `api_behavior_analysis` | api_behavior_profiler | approval_gate、Phase 4 |
-| `export_interface_analysis` | export_interface_analyzer | Phase 4 |
-| `behavior_profile` | behavior_profile_synthesizer | approval_gate、Phase 4 |
-| `function_boundary_analysis` | function_boundary_detector | approval_gate、phase3_deep_analysis |
-| `scheduler_decision` | scheduler | 外部接口 |
+### 5.1.1 版本化条目库（entry store）
 
-**HITL / Phase 3/4**：
-
-| 字段 | 类型 | 写入节点 | 说明 |
-|------|------|---------|------|
-| `phase2_human_decision` | str | approval_gate | `CONFIRM` 或 `MODIFY ...` 原文 |
-| `human_approved_functions` | list[str] | approval_gate | MODIFY 指定的函数地址列表 |
-| `func_analysis_refs` | `Annotated[list[dict], add]` | phase3_deep_analysis | 逐函数分析结果引用（reducer 聚合） |
-| `shard_reports` | `Annotated[list[dict], add]` | shard_synthesis | 分片综合报告（reducer 聚合） |
-| `final_report_ref` | str | aggregator | 固定为 `bb://summary/p4_final_report` |
+- **存储**：`tools/entry_store.py` 的 `ProjectStore` 维护内存态全量版本（每次写入追加不可变 `EntryVersion`，含 `ChangeReason` / reviewer / 校验状态），公共枚举（`EntryType` / `SubjectKind` / `DataValidationStatus` / `ReviewStatus` 等）在 payload 中以**整数存储**（`enum_to_int`）。
+- **持久化**：按写入次数与定时器触发**原子 pickle 快照**（`store.pickle.tmp` 写入后 `os.replace`），每次快照前把旧 `store.pickle` 轮转为 `store.bak.NNN.pickle`（默认保留最近 10 份，`blackboard.backup_limit` / `BB_BACKUP_LIMIT` 可调）。
+- **恢复**：加载时若 `store.pickle` 损坏，自动从新到旧尝试各备份文件，成功后记录 `recovered_from`；测试与进程退出经 `shutdown_stores()` 强制落盘。
+- **黑板原语**：`tools/blackboard_tools.py` 只保留原始证据能力（`extracts/` 分片读取、函数反编译片段加载），checkpoint / 日志 / review 全部在 `tools/entry_tools.py`。
 
 ### 5.2 Token 统计
 
@@ -255,7 +253,7 @@ print(str(token_report))                # 人类可读报告
 所有 agent 的单次 LLM 调用输入上限为 **128k tokens**（`config.yaml` 的 `llm.max_context_tokens`，环境变量 `MAX_CONTEXT_TOKENS` 兜底）：
 
 - **Worker（ReAct 循环）**：`create_agent` 挂 `SummarizationMiddleware`，历史消息估算超过 128k 的 75% 时自动摘要压缩，保留最近 20 条消息。
-- **直接 LLM 调用**（extractor / Phase 3 / Phase 4）：统一走 `graph_nodes.invoke_guarded`，调用前 `enforce_context_budget` 估算 token，超限时从最长消息开始头尾保留式截断，截断后仍超限则抛 `RuntimeError`。
+- **直接 LLM 调用**（Phase 3 / Phase 4）：统一走 `graph_nodes.invoke_guarded`，调用前 `enforce_context_budget` 估算 token，超限时从最长消息开始头尾保留式截断，截断后仍超限则抛 `RuntimeError`。
 
 ---
 
@@ -267,8 +265,7 @@ multi-agent-adk/
 ├── graph.py                          # 唯一编排定义处：build_graph(llm, checkpointer) StateGraph 组装
 ├── graph_nodes.py                    # 节点工厂与业务节点：make_worker_node / pre_extract /
 │                                     #   resolve_guides / approval_gate / phase3 / shard / aggregator
-├── state.py                          # AnalysisState(TypedDict) + Pydantic 输出模型
-│                                     #   (StringAnalysis / FunctionBoundaryAnalysis / ArchDetection / FuncCandidate)
+├── state.py                          # AnalysisState(TypedDict)：六个控制字段（见 5.1）
 ├── observability.py                  # TokenStatsCallback：按 langgraph_node 聚合 token 用量
 ├── config.py                         # 全局配置读写入口（config.yaml 加载，CLI > yaml > env > 默认值）
 ├── config.yaml                       # 全局配置：llm / paths / analysis
@@ -278,12 +275,15 @@ multi-agent-adk/
 ├── tools/                            # FunctionTool 实现
 │   ├── file_loaders.py               # IDA 导出文件加载工具（含 Phase -1 预提取）
 │   ├── pe_utils.py                   # PE 辅助工具（熵值计算等）
-│   ├── blackboard_tools.py           # 黑板读写、checkpoint、日志、函数反编译片段加载
+│   ├── blackboard_tools.py           # 原始证据读取：extracts 分片、函数反编译片段加载
+│   ├── entry_models.py               # 条目/版本/Payload Pydantic 模型（公共枚举整数存储）
+│   ├── entry_store.py                # ProjectStore：版本化条目库，pickle 原子快照 + 备份恢复
+│   ├── entry_tools.py                # 条目工具：读写/查询/上下文/review/checkpoint/日志/产物投影
+│   ├── agent_tools.py                # minimal/full 双模式 Agent 工具装配（get_agent_tools）
 │   └── token_stats.py                # Token 统计（StageTokenStats / AnalysisTokenReport）
 ├── workers/                          # Worker 定义
 │   ├── specs.py                      # WorkerSpec frozen dataclass + 6 个 spec（5 worker + scheduler）
 │   ├── shared_prompts.py             # 五段式提示词模板
-│   ├── extractor.py                  # 摘要提取 prompt 构建（build_extraction_prompt，节点内单次 llm.ainvoke 调用）
 │   ├── knowledge/                    # 专项分析方法论知识库（arch_detection 路由 + load_arch_guide 工具）
 │   ├── phase0/                       # Phase 0: 快速定性（提示词常量）
 │   │   ├── string_artifact_analyst.py
@@ -304,7 +304,7 @@ multi-agent-adk/
 ├── data/
 │   ├── input/                        # 输入：放置 *_export_for_ai 的 IDA 导出目录（自动发现）
 │   │   └── module.upx_export_for_ai/ # 示例 fixture
-│   └── output/                       # 输出（黑板）：{project_name}/{extracts,artifacts,summary,meta}
+│   └── output/                       # 输出（黑板）：{project_name}/{extracts,entries/store.pickle}
 └── tests/                            # 测试（编排层通过假模型注入 + graph.ainvoke 离线运行）
 ```
 
@@ -318,7 +318,7 @@ multi-agent-adk/
 |-------|------|---------|
 | **技能知识精修** | 将 `arch_windows_pe.md` 中的专项分析知识（DLL插件型/文件加载型/API哈希动态解析等）精修进各 Worker 提示词 | `workers/phase0/*.py`, `workers/phase1/*.py` |
 | **函数级深度分析** ✅ 已落地 | 对候选函数进行逐函数汇编级分析 | `graph_nodes.make_phase3_node`（节点内串行循环） |
-| **Worker output_schema 化** ✅ 已落地 | WorkerSpec 声明 `output_schema`（Pydantic），根治 JSON 字符串状态 | `workers/specs.py`、`state.py`（`StringAnalysis` / `FunctionBoundaryAnalysis`） |
+| **Worker output_schema 化** ✅ 已落地 | WorkerSpec 声明 `output_schema`（`WorkerOutput`，Pydantic），根治 JSON 字符串状态 | `workers/specs.py`、`tools/entry_models.py` |
 | **Phase 3 并行扇出** | 用 LangGraph `Send` 将逐函数分析扇出为真并行 | `graph.py` + `graph_nodes.py`（Step 3 待办） |
 | **SqliteSaver + interrupt()** | checkpointer 持久化图状态，HITL 用 `interrupt()` 恢复而非 CLI 阻塞 | `graph.py`、`main.py`（Step 2 待办） |
 

@@ -700,7 +700,7 @@ def test_graph_structure():
 
 
 def test_worker_nodes_return_empty_and_write_entries(tmp_path, monkeypatch):
-    """六个 Worker 节点全部返回 {}，产物投影为版本化条目（无 extractor、无兜底分支）。"""
+    """六个 Worker 节点全部返回 {}，产物投影为版本化条目（无兜底分支）。"""
     monkeypatch.chdir(tmp_path)
     _CALL_COUNTS.clear()
     state = {
@@ -715,7 +715,6 @@ def test_worker_nodes_return_empty_and_write_entries(tmp_path, monkeypatch):
     assert len(bb_query_entries("proj", {"entry_type": "finding"})["data"]) >= 3
     assert len(bb_query_entries("proj", {"entry_type": "function"})["data"]) == 1
     assert len(bb_query_entries("proj", {"entry_type": "decision"})["data"]) == 1
-    assert "extractor" not in _CALL_COUNTS
     assert "unmatched" not in _CALL_COUNTS
 
 
@@ -806,7 +805,6 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
         "phase3", "shard", "aggregator",
     ):
         assert _CALL_COUNTS.get(branch, 0) >= 1, branch
-    assert "extractor" not in _CALL_COUNTS
     assert "unmatched" not in _CALL_COUNTS
     report = bb_get_entry(final_state["final_report_entry_id"], "test_proj")["data"]
     assert report["versions"][0]["payload"]["details"]["malware_family"] == "Unknown"
