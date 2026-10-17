@@ -16,3 +16,11 @@ analysis:
   project_name: module                 # CLI -p 可覆盖，环境变量回退: PROJECT_NAME
   input_name: null                     # data/input/ 下的导出目录名（可省略 _export_for_ai 后缀），CLI -i 可覆盖
   resume: false                        # CLI -r 可覆盖
+
+agents:
+  tool_mode: minimal                   # Worker 工具注入模式（minimal/全量），见 workers/specs.py
+
+blackboard:
+  flush_every_writes: 20               # 累计 N 次未落盘写后同步 flush，环境变量回退: BB_FLUSH_EVERY_WRITES
+  flush_interval_seconds: 5            # 首批 dirty 数据后启动的定时 flush 间隔，环境变量回退: BB_FLUSH_INTERVAL_SECONDS
+  backup_limit: 10                     # store.pickle 备份轮换上限，环境变量回退: BB_BACKUP_LIMIT
