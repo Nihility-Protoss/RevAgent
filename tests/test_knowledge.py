@@ -77,27 +77,27 @@ def test_match_guides_file_loader_form():
     assert guides.index("file_loader_triage") < guides.index("cpp")
 
 
-def test_load_active_falls_back_when_meta_missing():
+def test_load_active_falls_back_when_runtime_empty(tmp_path, monkeypatch):
+    """runtime 中没有 active_guides 时回退基线，且不会创建 meta 目录。"""
     from workers.knowledge import load_knowledge
-    result = load_knowledge("__active__", "nonexistent_project")
+    monkeypatch.chdir(tmp_path)
+    result = load_knowledge("__active__", "proj")
     assert result["status"] == "success"
     assert result["guides"] == ["windows_pe"]
     assert "PE" in result["content"]
+    assert not (tmp_path / "data" / "output" / "proj" / "meta").exists()
 
 
-def test_load_active_reads_meta(tmp_path, monkeypatch):
-    import json
-    import os
-    from tools.blackboard_tools import board_base_dir
+def test_load_active_reads_runtime(tmp_path, monkeypatch):
+    from tools.entry_tools import bb_set_runtime
     from workers.knowledge import load_knowledge
     monkeypatch.chdir(tmp_path)
-    os.makedirs(board_base_dir() + "/proj/meta")
-    with open(board_base_dir() + "/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {"status": "success",
-             "guides": [{"name": "windows_pe"}, {"name": "rust"}]},
-            f,
-        )
+    bb_set_runtime(
+        "active_guides",
+        {"status": "success",
+         "guides": [{"name": "windows_pe"}, {"name": "rust"}]},
+        "proj",
+    )
     result = load_knowledge("__active__", "proj")
     assert result["guides"] == ["windows_pe", "rust"]
     assert "Rust" in result["content"]

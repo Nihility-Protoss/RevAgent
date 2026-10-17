@@ -20,9 +20,12 @@ _board_path = board_path
 
 
 def _ensure_dirs(project_name: str) -> None:
-    """确保黑板所有子目录都存在。"""
-    for sub in ["extracts", "artifacts", "summary", "meta", "artifacts/latest"]:
-        os.makedirs(board_path(project_name, *sub.split("/")), exist_ok=True)
+    """确保黑板基础子目录存在（条目库与预提取分片）。
+
+    artifacts/summary/meta 等旧目录已不再预创建；遗留函数需要时自行创建。
+    """
+    for sub in ["extracts", "entries"]:
+        os.makedirs(board_path(project_name, sub), exist_ok=True)
 
 
 def _estimate_tokens(data: dict) -> int:
@@ -180,9 +183,8 @@ def bb_has_artifact(artifact_name: str, project_name: str) -> bool:
 
 def bb_checkpoint(phase: str, project_name: str) -> dict:
     """保存 checkpoint：更新 state.json 并追加到 checkpoints.json。"""
-    _ensure_dirs(project_name)
-
     meta_dir = board_path(project_name, "meta")
+    os.makedirs(meta_dir, exist_ok=True)
     state_path = os.path.join(meta_dir, "state.json")
     cp_path = os.path.join(meta_dir, "checkpoints.json")
 
@@ -229,9 +231,9 @@ def bb_load_checkpoint(project_name: str) -> Optional[dict]:
 
 def bb_log_event(event_type: str, details: dict, project_name: str) -> dict:
     """追加一条日志事件到 execution_log.jsonl。"""
-    _ensure_dirs(project_name)
-
-    log_path = board_path(project_name, "meta", "execution_log.jsonl")
+    meta_dir = board_path(project_name, "meta")
+    os.makedirs(meta_dir, exist_ok=True)
+    log_path = os.path.join(meta_dir, "execution_log.jsonl")
     entry = {
         "timestamp": _now_iso(),
         "event_type": event_type,

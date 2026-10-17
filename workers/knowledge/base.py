@@ -3,13 +3,12 @@
 知识文件是 Markdown 文档，带有一小段类 YAML 的 frontmatter 头部（由手写解析器解析——有意不依赖 pyyaml）。
 注册表在 import 时构建一次。
 """
-import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.blackboard_tools import _board_path, _estimate_tokens
+from tools.blackboard_tools import _estimate_tokens
+from tools.entry_tools import bb_get_runtime
 
 KNOWLEDGE_DIR = Path(__file__).parent
 
@@ -97,17 +96,21 @@ def _read_guide(meta: KnowledgeMeta) -> dict:
 
 
 def _load_active(project_name: str) -> dict:
-    """解析 __active__ 哨兵值，对照 meta/active_guides.json 确定生效的 guide 集合。"""
-    meta_path = _board_path(project_name, "meta", "active_guides.json")
-    names = [_DEFAULT_GUIDE]
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                doc = json.load(f)
-            if doc.get("guides"):
-                names = [g["name"] for g in doc["guides"] if g.get("name") in KNOWLEDGE_REGISTRY]
-        except Exception:
-            names = [_DEFAULT_GUIDE]
+    """解析 __active__ 哨兵值，依据 runtime.active_guides 确定生效的 guide 集合。
+
+    runtime 缺失或内容异常时回退基线 windows_pe。
+    """
+    names: list = []
+    try:
+        doc = bb_get_runtime("active_guides", project_name, default={}) or {}
+        guides = doc.get("guides")
+        if isinstance(guides, list):
+            names = [
+                g["name"] for g in guides
+                if isinstance(g, dict) and g.get("name") in KNOWLEDGE_REGISTRY
+            ]
+    except Exception:
+        names = []
     if not names:
         names = [_DEFAULT_GUIDE]
     parts = []

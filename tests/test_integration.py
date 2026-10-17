@@ -29,57 +29,109 @@ from graph_nodes import (
 )
 from observability import TokenStatsCallback
 from tools.blackboard_tools import board_base_dir
+from tools.entry_tools import (
+    bb_checkpoint,
+    bb_create_entry,
+    bb_get_runtime,
+    bb_query_entries,
+    bb_set_runtime,
+)
 from tools.token_stats import AnalysisTokenReport, StageTokenStats
+from workers.specs import ALL_SPECS
 
 
 # === 脚本化假聊天模型 =======================================================================
 
 STRING_ANALYSIS_JSON = json.dumps({
     "status": "success",
-    "suspicious_patterns": [{"pattern": "C2 URL", "risk_level": "high", "evidence": "http://evil.example/x"}],
-    "overall_assessment": "疑似 Rust 编写的 Stealer",
-    "arch_detection": {
-        "language": "rust", "compiler_hints": ["rustc"], "packer_protector": ["upx"],
-        "sample_form": "plain_exe", "confidence": "high", "evidence": ["/rustc/1.75.0/"],
+    "conclusion": "疑似 Rust 编写的 Stealer，含 C2 URL",
+    "confidence": "high",
+    "payload": {
+        "sample": {
+            "overall_assessment": "疑似 Rust 编写的 Stealer",
+            "arch_detection": {
+                "language": "rust", "compiler_hints": ["rustc"], "packer_protector": ["upx"],
+                "sample_form": "plain_exe", "confidence": "high", "evidence": ["/rustc/1.75.0/"],
+            },
+        },
+        "findings": [{
+            "category": "string", "name": "http://evil.example/x",
+            "details": {"pattern": "C2 URL", "risk_level": "high", "evidence": "http://evil.example/x"},
+        }],
     },
+    "evidence_refs": ["strings_extract:0x402000"],
+    "annotations": {},
 }, ensure_ascii=False)
 
 API_ANALYSIS_JSON = json.dumps({
     "status": "success",
-    "suspicious_apis": [{"api": "CreateRemoteThread", "dll": "kernel32", "threat_category": "进程注入", "risk_description": "注入"}],
-    "overall_assessment": "进程注入特征",
+    "conclusion": "进程注入特征",
+    "confidence": "high",
+    "payload": {
+        "sample": None,
+        "findings": [{
+            "category": "api", "name": "CreateRemoteThread",
+            "details": {"dll": "kernel32", "threat_category": "进程注入", "risk_description": "注入"},
+        }],
+    },
+    "evidence_refs": ["imports_extract:CreateRemoteThread"],
+    "annotations": {},
 }, ensure_ascii=False)
 
 EXPORT_ANALYSIS_JSON = json.dumps({
     "status": "success",
-    "loading_pattern": {"pattern_type": "标准插件型", "confidence": "medium"},
-    "overall_assessment": "标准 DLL",
+    "conclusion": "标准 DLL",
+    "confidence": "medium",
+    "payload": {
+        "sample": None,
+        "findings": [{
+            "category": "export", "name": "DllMain",
+            "details": {"loading_pattern": {"pattern_type": "标准插件型", "confidence": "medium"}},
+        }],
+    },
+    "evidence_refs": ["exports_extract:DllMain"],
+    "annotations": {},
 }, ensure_ascii=False)
 
 BOUNDARY_JSON = json.dumps({
     "status": "success",
-    "total_functions": 10,
-    "filtered_functions": 8,
-    "candidates": [{
-        "func_addr": "0x401000", "func_name": "sub_401000", "size": 256, "xrefs": 12,
-        "is_thunk": False, "is_export": False, "analysis_priority": 9,
-        "priority_reason": "高交叉引用",
-    }],
-    "recommended_top_n": 1,
-    "exclusion_notes": [],
-    "export_functions_highlight": [],
+    "conclusion": "筛出 1 个高优先级候选",
+    "confidence": "high",
+    "payload": {
+        "candidates": [{
+            "func_addr": "0x401000", "func_name": "sub_401000", "size": 256, "xrefs": 12,
+            "is_thunk": False, "is_export": False, "analysis_priority": 9,
+            "priority_reason": "高交叉引用",
+        }],
+    },
+    "evidence_refs": ["functions_extract:0x401000"],
+    "annotations": {},
 }, ensure_ascii=False)
 
 BEHAVIOR_JSON = json.dumps({
     "status": "success",
-    "behavior_profile": {"primary_type": "Stealer", "secondary_types": [], "confidence": "high", "evidence": ["strings"]},
-    "overall_assessment": "Stealer",
+    "conclusion": "Stealer 行为定型",
+    "confidence": "high",
+    "payload": {
+        "sample": None,
+        "findings": [],
+        "behavior_profile": {"primary_type": "Stealer", "secondary_types": [], "confidence": "high", "evidence": ["strings"]},
+    },
+    "evidence_refs": ["strings_summary"],
+    "annotations": {},
 }, ensure_ascii=False)
 
 SCHEDULER_JSON = json.dumps({
-    "status": "success", "phase": "initial_complete", "action": "AWAITING_HUMAN_REVIEW",
-    "summary": {"behavior_type": "Stealer", "confidence": "high", "high_risk_count": 1, "candidate_functions": 1},
-    "details": {},
+    "status": "success",
+    "conclusion": "初步分析完成，等待人工审查",
+    "confidence": "high",
+    "payload": {
+        "action": "AWAITING_HUMAN_REVIEW",
+        "selected_addresses": ["0x401000"],
+        "summary": {"behavior_type": "Stealer", "confidence": "high", "high_risk_count": 1, "candidate_functions": 1},
+    },
+    "evidence_refs": [],
+    "annotations": {},
 }, ensure_ascii=False)
 
 FUNC_ANALYSIS_JSON = json.dumps({
@@ -110,23 +162,6 @@ FINAL_JSON = json.dumps({
 _CALL_COUNTS = {}
 
 
-def _extractor_reply(prompt_text: str) -> str:
-    marker = "输入 Artifact 类型:"
-    artifact_type = "strings"
-    if marker in prompt_text:
-        artifact_type = prompt_text.split(marker, 1)[1].strip().splitlines()[0].strip()
-    payload = {
-        "worker": f"extractor_{artifact_type}",
-        "key_findings": ["smoke"],
-        "confidence": "high",
-        "arch_detection": {"language": "rust", "confidence": "high"},
-    }
-    if artifact_type == "function_deep":
-        payload["suspicious_behaviors"] = ["C2 connect"]
-        payload["analysis_priority"] = 9
-    return json.dumps(payload, ensure_ascii=False)
-
-
 class ScriptedFakeChatModel(BaseChatModel):
     """按 prompt 内容分发预置 JSON 的假聊天模型。
 
@@ -138,9 +173,6 @@ class ScriptedFakeChatModel(BaseChatModel):
 
     def _script(self, messages: list[BaseMessage]) -> str:
         text = "\n".join(getattr(m, "content", "") or "" for m in messages)
-        if "结构化摘要提取器" in text:
-            _CALL_COUNTS["extractor"] = _CALL_COUNTS.get("extractor", 0) + 1
-            return _extractor_reply(text)
         if "中央调度者" in text:
             _CALL_COUNTS["scheduler"] = _CALL_COUNTS.get("scheduler", 0) + 1
             return SCHEDULER_JSON
@@ -413,47 +445,70 @@ def test_build_review_message_includes_behavior_type():
 
 # === 知识路由（resolve_active_guides） ===============================================
 
-def test_resolve_active_guides_rust(tmp_path, monkeypatch):
-    """arch_detection=rust/high 会激活 rust 指南，并写入 meta 文件。"""
+def _create_sample_entry(project_name="proj", arch_detection=None, run_id="run-1"):
+    """通过条目黑板创建一个 sample 条目（模拟 Phase 0 字符串 Worker 的产物）。"""
+    bb_create_entry(
+        "sample", "sample", "sample",
+        {"conclusion": "Rust 样本", "confidence": "high",
+         "payload": {"overall_assessment": "Rust", "arch_detection": arch_detection or {}},
+         "evidence_refs": [], "annotations": {}, "relation_refs": []},
+        {"phase": "phase0", "agent": "strings", "run_id": run_id},
+        project_name, f"{run_id}:phase0:strings:sample",
+    )
+
+
+def test_resolve_active_guides_reads_sample_entry(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    os.makedirs(board_base_dir() + "/proj/summary")
-    with open(board_base_dir() + "/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {"arch_detection": {"language": "rust", "confidence": "high"}},
-            f,
-        )
+    bb_create_entry(
+        "sample", "sample", "sample",
+        {"conclusion": "Rust 样本", "confidence": "high",
+         "payload": {"overall_assessment": "Rust", "arch_detection": {
+             "language": "rust", "confidence": "high",
+         }},
+         "evidence_refs": [], "annotations": {}, "relation_refs": []},
+        {"phase": "phase0", "agent": "strings", "run_id": "run-1"},
+        "proj", "run-1:phase0:strings:sample",
+    )
+    result = resolve_active_guides("proj")
+    assert "rust" in [guide["name"] for guide in result["guides"]]
+    assert bb_get_runtime("active_guides", "proj")["guides"] == result["guides"]
+
+
+def test_resolve_active_guides_rust(tmp_path, monkeypatch):
+    """sample 条目携带 rust/high 的 arch_detection，会激活 rust 指南。"""
+    monkeypatch.chdir(tmp_path)
+    _create_sample_entry(arch_detection={
+        "language": "rust", "confidence": "high",
+    })
     result = resolve_active_guides("proj")
     assert result["status"] == "success"
-    with open(board_base_dir() + "/proj/meta/active_guides.json", encoding="utf-8") as f:
-        meta = json.load(f)
-    names = [g["name"] for g in meta["guides"]]
+    names = [g["name"] for g in result["guides"]]
     assert names[0] == "windows_pe"
     assert "rust" in names
+    # 结果持久化到 runtime.active_guides
+    runtime_doc = bb_get_runtime("active_guides", "proj")
+    assert [g["name"] for g in runtime_doc["guides"]] == names
 
 
 def test_resolve_active_guides_low_confidence_defaults(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    os.makedirs(board_base_dir() + "/proj/summary")
-    with open(board_base_dir() + "/proj/summary/strings_summary.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {"arch_detection": {"language": "unknown", "confidence": "low"}},
-            f,
-        )
+    _create_sample_entry(arch_detection={"language": "unknown", "confidence": "low"})
     result = resolve_active_guides("proj")
     assert [g["name"] for g in result["guides"]] == ["windows_pe"]
 
 
-def test_resolve_active_guides_missing_summary(tmp_path, monkeypatch):
-    """缺失 strings_summary 不能中断流水线；使用默认值并记录日志。"""
+def test_resolve_active_guides_missing_sample_entry(tmp_path, monkeypatch):
+    """没有任何 sample 条目时不能中断流水线；回退默认值并写 runtime 日志。"""
     monkeypatch.chdir(tmp_path)
     result = resolve_active_guides("proj")
     assert result["status"] == "success"
     assert [g["name"] for g in result["guides"]] == ["windows_pe"]
-    assert os.path.exists(board_base_dir() + "/proj/meta/execution_log.jsonl")
+    log = bb_get_runtime("execution_log", "proj", []) or []
+    assert any(e["event_type"] == "active_guides_default_fallback" for e in log)
 
 
 def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
-    """从 state 传入的 arch_detection 必须能在没有 summary 文件的情况下激活 rust。"""
+    """显式传入的 arch_detection 优先于条目查询，且不需要任何条目。"""
     monkeypatch.chdir(tmp_path)
     result = resolve_active_guides(
         "proj", arch_detection={"language": "rust", "confidence": "high"}
@@ -461,18 +516,57 @@ def test_resolve_active_guides_prefers_state_param(tmp_path, monkeypatch):
     names = [g["name"] for g in result["guides"]]
     assert names[0] == "windows_pe"
     assert "rust" in names
-    # 不依赖 blackboard（黑板）：此时不存在 summary 文件
-    assert not os.path.exists(board_base_dir() + "/proj/summary/strings_summary.json")
+    # 不依赖条目黑板：此时不存在任何条目
+    assert bb_query_entries("proj", {"entry_type": "sample"})["data"] == []
 
 
-def test_load_active_guides_text_fallback_on_corrupt_meta(tmp_path, monkeypatch):
-    """损坏的 meta/active_guides.json 必须回退到 windows_pe 基线。"""
+def test_load_active_guides_text_fallback_on_abnormal_runtime(tmp_path, monkeypatch):
+    """runtime.active_guides 内容异常时必须回退到 windows_pe 基线。"""
     monkeypatch.chdir(tmp_path)
-    os.makedirs(board_base_dir() + "/proj/meta")
-    with open(board_base_dir() + "/proj/meta/active_guides.json", "w", encoding="utf-8") as f:
-        f.write("{invalid")
+    bb_set_runtime("active_guides", {"guides": "not-a-list"}, "proj")
     text = _load_active_guides_text("proj")
     assert "PE" in text
+
+
+# === Phase -1 预提取（run_id 与 checkpoint 走 runtime 工具） ==========================
+
+def test_pre_extract_resume_restores_run_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bb_set_runtime("run_id", "run-1", "proj")
+    bb_checkpoint("pre_extract_complete", "proj")
+    result = graph_nodes.pre_extract_node({
+        "sample_project_name": "proj", "resume": True,
+    })
+    assert result["run_id"] == "run-1"
+    assert not (tmp_path / "data" / "output" / "proj" / "meta").exists()
+
+
+def test_pre_extract_fresh_generates_new_run_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        graph_nodes, "pre_extract_sample",
+        lambda export_dir, project: {"status": "success"},
+    )
+    monkeypatch.setattr(
+        graph_nodes, "detect_sample_type",
+        lambda export_dir: {"sample_type": "pe", "confidence": "high", "indicators": []},
+    )
+    state = {"sample_project_name": "fresh", "sample_export_dir": "unused", "resume": False}
+    first = graph_nodes.pre_extract_node(state)
+    second = graph_nodes.pre_extract_node(state)
+    assert first["run_id"] != second["run_id"]
+    assert bb_get_runtime("run_id", "fresh") == second["run_id"]
+
+
+def test_pre_extract_resume_missing_run_id_raises(tmp_path, monkeypatch):
+    """resume 存在 checkpoint 但缺少 run_id 时必须明确报错。"""
+    monkeypatch.chdir(tmp_path)
+    bb_checkpoint("pre_extract_complete", "proj")
+    bb_set_runtime("run_id", None, "proj")
+    with pytest.raises(RuntimeError, match="resume 缺少 run_id"):
+        graph_nodes.pre_extract_node({
+            "sample_project_name": "proj", "resume": True,
+        })
 
 
 # === Phase -1 预提取 =======================================================================
@@ -516,6 +610,26 @@ def test_graph_structure():
     assert EXPECTED_NODE_NAMES <= node_names
 
 
+def test_worker_nodes_return_empty_and_write_entries(tmp_path, monkeypatch):
+    """六个 Worker 节点全部返回 {}，产物投影为版本化条目（无 extractor、无兜底分支）。"""
+    monkeypatch.chdir(tmp_path)
+    _CALL_COUNTS.clear()
+    state = {
+        "sample_project_name": "proj",
+        "sample_export_dir": _make_export_dir(str(tmp_path)),
+        "run_id": "run-1",
+    }
+    for spec in ALL_SPECS:
+        node = graph_nodes.make_worker_node(spec, ScriptedFakeChatModel())
+        assert asyncio.run(node(state)) == {}
+    assert len(bb_query_entries("proj", {"entry_type": "sample"})["data"]) == 1
+    assert len(bb_query_entries("proj", {"entry_type": "finding"})["data"]) >= 3
+    assert len(bb_query_entries("proj", {"entry_type": "function"})["data"]) == 1
+    assert len(bb_query_entries("proj", {"entry_type": "decision"})["data"]) == 1
+    assert "extractor" not in _CALL_COUNTS
+    assert "unmatched" not in _CALL_COUNTS
+
+
 # === 端到端编排冒烟测试 =======================================================================
 
 def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
@@ -536,12 +650,12 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
         "sample_type": "auto",
     }))
 
-    # 每个 worker + extractor + phase3/4 分支都至少应答过一次调用，且没有调用落到通用兜底分支。
+    # 每个 worker + phase3/4 分支都至少应答过一次调用，且没有调用落到通用兜底分支。
     assert _CALL_COUNTS.get("unmatched", 0) == 0
     for branch in [
         "string_analyst", "api_profiler", "export_analyzer",
         "behavior_synthesizer", "boundary_detector", "scheduler",
-        "extractor", "phase3", "shard", "aggregator",
+        "phase3", "shard", "aggregator",
     ]:
         assert _CALL_COUNTS.get(branch, 0) >= 1, f"fake model branch never fired: {branch}"
 

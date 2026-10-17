@@ -1,7 +1,6 @@
 """LangGraph 节点工厂与业务节点。
 """
 import json
-import os
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -17,20 +16,19 @@ from state import AnalysisState
 from tools.agent_tools import get_agent_tools
 from tools.blackboard_tools import (
     _now_iso,
-    bb_checkpoint,
     bb_has_artifact,
     bb_list_summaries,
-    bb_load_checkpoint,
-    bb_log_event,
     bb_read_summary,
     bb_write_artifact,
     bb_write_summary,
-    board_path,
     load_function_data,
 )
 from tools.entry_tools import (
+    bb_checkpoint,
     bb_get_runtime,
-    bb_log_event as bb_log_runtime_event,
+    bb_load_checkpoint,
+    bb_log_event,
+    bb_query_entries,
     bb_set_runtime,
     bb_write_worker_output,
 )
@@ -238,7 +236,7 @@ def _project_worker_output(spec: WorkerSpec, payload: dict,
     """
     result = bb_write_worker_output(spec.name, payload, project_name, run_id)
     if result.get("status") == "error":
-        bb_log_runtime_event(
+        bb_log_event(
             "worker_projection_failed",
             {
                 "worker": spec.name,
@@ -317,18 +315,28 @@ def make_worker_node(spec: WorkerSpec, llm=None):
 # === Phase -1: 预提取（纯函数节点）===
 
 def pre_extract_node(state: AnalysisState) -> dict:
-    """
-    把 Phase -1 预提取结果写入黑板（resume 时跳过）。
+    """把 Phase -1 预提取结果写入黑板（resume 时跳过）。
+
+    fresh 运行生成新的 run_id（uuid4().hex）并写入 runtime；resume 时从 runtime
+    恢复原 run_id，缺少 run_id 抛出 RuntimeError。checkpoint 与事件日志全部
+    通过 runtime 工具保存，不再创建 meta/ 目录。
     """
     project = state["sample_project_name"]
-    existing = bb_load_checkpoint(project)
-    if state.get("resume") and existing is not None:
-        bb_log_event(
-            "run_start",
-            {"mode": "resume", "phase": existing.get("current_phase")},
-            project,
-        )
-        return {}
+    if state.get("resume"):
+        existing = bb_load_checkpoint(project)
+        if existing is not None:
+            run_id = bb_get_runtime("run_id", project)
+            if not run_id:
+                raise RuntimeError("resume 缺少 run_id")
+            bb_log_event(
+                "run_start",
+                {"mode": "resume", "phase": existing.get("current_phase")},
+                project,
+            )
+            return {"run_id": run_id}
+
+    run_id = uuid4().hex
+    bb_set_runtime("run_id", run_id, project)
     bb_log_event("run_start", {"mode": "fresh"}, project)
     result = pre_extract_sample(state["sample_export_dir"], project)
     if result["status"] != "success":
@@ -348,37 +356,45 @@ def pre_extract_node(state: AnalysisState) -> dict:
     )
 
     bb_checkpoint("pre_extract_complete", project)
-    return {"sample_type": sample_type}
+    return {"sample_type": sample_type, "run_id": run_id}
 
 
 # === 知识路由（纯函数节点，逻辑照搬原 orchestrator.resolve_active_guides）===
 
+def _latest_sample_arch_detection(project_name: str) -> dict:
+    """查询最新的 sample 条目，提取其 payload.arch_detection；缺失时返回 {}。"""
+    try:
+        result = bb_query_entries(project_name, {"entry_type": "sample"}, limit=50)
+        entries = result.get("data") or []
+        if not entries:
+            return {}
+        head = (entries[-1].get("versions") or [{}])[0]
+        arch = ((head.get("payload") or {}).get("arch_detection"))
+        return arch if isinstance(arch, dict) else {}
+    except Exception:
+        return {}
+
+
 def resolve_active_guides(project_name: str, arch_detection: Optional[dict] = None) -> dict:
     """解析本样本激活了哪些知识指南。
 
-    若传入 arch_detection 则直接使用（来自图状态中的 Phase 0 字符串分析）；
-    否则从黑板上的 strings_summary 读取。将其与知识注册表匹配，并把结果持久化到
-    meta/active_guides.json。永不抛异常：任何失败都回退到 windows_pe 基线。
+    若传入 arch_detection 则直接使用；否则查询黑板上最新的 sample 条目，
+    取其 payload.arch_detection。结果持久化到 runtime.active_guides。
+    永不抛异常：任何失败都回退到 windows_pe 基线。
     """
     if arch_detection is not None:
         arch = arch_detection or {}
     else:
-        arch = {}
-        try:
-            summary = bb_read_summary("strings_summary", project_name)
-            if summary.get("status") == "success":
-                arch = (summary.get("data") or {}).get("arch_detection") or {}
-        except Exception:
-            arch = {}
+        arch = _latest_sample_arch_detection(project_name)
 
-    names = match_guides(arch)
     if not arch:
         bb_log_event(
             "active_guides_default_fallback",
-            {"reason": "strings_summary or arch_detection missing"},
+            {"reason": "sample entry or arch_detection missing"},
             project_name,
         )
 
+    names = match_guides(arch)
     guides = [
         {
             "name": n,
@@ -393,13 +409,7 @@ def resolve_active_guides(project_name: str, arch_detection: Optional[dict] = No
         "arch_detection": arch,
         "resolved_at": _now_iso(),
     }
-    try:
-        meta_dir = board_path(project_name, "meta")
-        os.makedirs(meta_dir, exist_ok=True)
-        with open(os.path.join(meta_dir, "active_guides.json"), "w", encoding="utf-8") as f:
-            json.dump(doc, f, ensure_ascii=False, indent=2)
-    except Exception as exc:
-        return {"status": "error", "error": str(exc), "guides": guides}
+    bb_set_runtime("active_guides", doc, project_name)
     return doc
 
 
@@ -414,22 +424,22 @@ def resolve_guides_node(state: AnalysisState) -> dict:
 
 def _load_active_guides_text(project_name: str) -> str:
     """拼接所有激活指南的完整文本，用于注入 prompt。
+
+    只读取 runtime.active_guides；缺失或内容异常时回退 __active__（基线指南）。
     """
 
     def _fallback() -> str:
         result = load_knowledge("__active__", project_name)
         return result.get("content", "") if result.get("status") == "success" else ""
 
-    meta_path = board_path(project_name, "meta", "active_guides.json")
-    if not os.path.exists(meta_path):
-        return _fallback()
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            doc = json.load(f)
-    except Exception:
+    doc = bb_get_runtime("active_guides", project_name, default={}) or {}
+    guides = doc.get("guides")
+    if not isinstance(guides, list):
         return _fallback()
     parts = []
-    for g in doc.get("guides", []):
+    for g in guides:
+        if not isinstance(g, dict):
+            continue
         name = g.get("name")
         if name not in KNOWLEDGE_REGISTRY:
             continue
