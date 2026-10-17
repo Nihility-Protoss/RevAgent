@@ -73,3 +73,39 @@ def test_insufficient_data_does_not_create_empty_finding(tmp_path, monkeypatch):
     }, "proj", "run-1")
     assert result["written"] == 0
     assert bb_query_entries("proj", {"entry_type": "finding"})["data"] == []
+
+
+def test_worker_task_contains_idempotency_key_formula(tmp_path, monkeypatch):
+    """任务文本必须包含幂等键公式及本次调用的具体值（full 模式 Agent 主动写入与框架兜底一致）。"""
+    from graph_nodes import build_worker_task
+    from workers.specs import scheduler, string_artifact_analyst
+
+    monkeypatch.chdir(tmp_path)
+    state = {"sample_project_name": "proj", "sample_export_dir": "data/input/x"}
+    task = build_worker_task(string_artifact_analyst, state, "run-9")
+    assert "{run_id}:{phase}:{worker_name}:{subject_key}" in task
+    assert "run-9:phase0:string_artifact_analyst:" in task
+    task = build_worker_task(scheduler, state, "run-9")
+    assert "run-9:phase2:scheduler:" in task
+
+
+def test_projection_failure_is_logged_and_swallowed(tmp_path, monkeypatch):
+    """投影失败（scheduler 地址未解析）记录 worker_projection_failed 事件且不抛异常。"""
+    from graph_nodes import _project_worker_output
+    from tools.entry_tools import bb_get_runtime
+    from workers.specs import scheduler
+
+    monkeypatch.chdir(tmp_path)
+    payload = {
+        "status": "success", "conclusion": "等待人工审查", "confidence": "high",
+        "payload": {"action": "AWAITING_HUMAN_REVIEW",
+                    "selected_addresses": ["0x999999"], "summary": {}},
+        "evidence_refs": [], "annotations": {},
+    }
+    result = _project_worker_output(scheduler, payload, "proj", "run-1")
+    assert result["status"] == "error"
+    assert bb_query_entries("proj", {"entry_type": "decision"})["data"] == []
+    log = bb_get_runtime("execution_log", "proj", []) or []
+    failures = [e for e in log if e["event_type"] == "worker_projection_failed"]
+    assert len(failures) == 1
+    assert failures[0]["details"]["worker"] == "scheduler"

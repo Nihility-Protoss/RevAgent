@@ -28,7 +28,12 @@ from tools.blackboard_tools import (
     board_path,
     load_function_data,
 )
-from tools.entry_tools import bb_get_runtime, bb_set_runtime, bb_write_worker_output
+from tools.entry_tools import (
+    bb_get_runtime,
+    bb_log_event as bb_log_runtime_event,
+    bb_set_runtime,
+    bb_write_worker_output,
+)
 from tools.file_loaders import detect_sample_type, pre_extract_sample
 from workers.extractor import build_extraction_prompt
 from workers.knowledge import KNOWLEDGE_REGISTRY, load_knowledge, match_guides
@@ -193,6 +198,58 @@ def _resolve_run_id(state: AnalysisState) -> str:
     return run_id
 
 
+def _worker_phase(worker_name: str) -> str:
+    """worker 名 → 所属阶段（与 tools.entry_tools 的投影分派保持一致）。"""
+    from tools.entry_tools import _WORKER_PHASES
+
+    phase = _WORKER_PHASES.get(worker_name)
+    if phase is None:
+        raise ValueError(f"未知 worker: {worker_name}")
+    return phase
+
+
+def build_worker_task(spec: WorkerSpec, state: AnalysisState, run_id: str) -> str:
+    """构建发给 Worker Agent 的任务文本。
+
+    任务文本必须包含本次调用的幂等键公式（``{run_id}:{phase}:{worker_name}:{subject_key}``
+    及代入具体值后的前缀），full 模式 Agent 主动写入时才能与框架兜底投影使用同一公式。
+    """
+    project = state["sample_project_name"]
+    export_dir = state.get("sample_export_dir", "")
+    phase = _worker_phase(spec.name)
+    key_prefix = f"{run_id}:{phase}:{spec.name}"
+    return (
+        f"分析样本: {project}, "
+        f"导出目录: {export_dir}\n"
+        f"本次运行 run_id: {run_id}，你的阶段: {phase}，worker 名: {spec.name}。\n"
+        f"你的产物将由框架按幂等键公式写入黑板: "
+        f"{{run_id}}:{{phase}}:{{worker_name}}:{{subject_key}}，"
+        f"本次调用即 {key_prefix}:<subject_key>。"
+        f"若你自行调用写入工具，必须使用相同的键公式与本次 run_id/阶段/worker 名。"
+    )
+
+
+def _project_worker_output(spec: WorkerSpec, payload: dict,
+                           project_name: str, run_id: str) -> dict:
+    """把 Worker 产物投影到黑板；失败时记录 runtime 事件但不抛出。
+
+    投影错误（未知发现类别、scheduler 地址未解析等）以 ``worker_projection_failed``
+    事件写入黑板 runtime 日志，保证失败可见；节点仍然继续执行。
+    """
+    result = bb_write_worker_output(spec.name, payload, project_name, run_id)
+    if result.get("status") == "error":
+        bb_log_runtime_event(
+            "worker_projection_failed",
+            {
+                "worker": spec.name,
+                "reason": result.get("reason"),
+                "error": result.get("error"),
+            },
+            project_name,
+        )
+    return result
+
+
 def make_worker_node(spec: WorkerSpec, llm=None):
     """把一个 WorkerSpec 编译为 LangGraph 节点函数。
 
@@ -231,10 +288,7 @@ def make_worker_node(spec: WorkerSpec, llm=None):
         export_dir = state.get("sample_export_dir", "")
         run_id = _resolve_run_id(state)
         tool_mode = state.get("tool_mode") or cfg("agents.tool_mode", default="minimal")
-        task = (
-            f"分析样本: {project}, "
-            f"导出目录: {export_dir}"
-        )
+        task = build_worker_task(spec, state, run_id)
         result = await _agent(project, run_id, export_dir, tool_mode).ainvoke(
             {"messages": [("user", task)]}, config=config
         )
@@ -247,7 +301,7 @@ def make_worker_node(spec: WorkerSpec, llm=None):
             payload = parse_json_loose(result["messages"][-1].content)
 
         if isinstance(payload, dict):
-            bb_write_worker_output(spec.name, payload, project, run_id)
+            _project_worker_output(spec, payload, project, run_id)
         else:
             bb_log_event(
                 "worker_output_invalid",
