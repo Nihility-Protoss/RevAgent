@@ -57,3 +57,23 @@ def test_minimal_reader_commands_and_project_binding(tmp_path, monkeypatch):
     invalid = reader1.invoke({"command": "unknown"})
     assert invalid["status"] == "error"
     assert invalid["expected_examples"] == ["next", "chunk=0", "keyword=<文本>"]
+
+
+def test_keyword_filter_covers_all_chunks(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "data" / "output" / "pk" / "extracts"
+    directory.mkdir(parents=True)
+    # 150 条其他字符串占满 chunk 0（chunk_size=100），关键字只命中第 101 条
+    others = [f"noise_{i}" for i in range(100)]
+    urls = [{"text": u, "raw": u} for u in others] + [
+        {"text": "https://evil-c2.example.com/gate", "raw": "https://evil-c2.example.com/gate"},
+    ]
+    (directory / "strings_extract.json").write_text(json.dumps({
+        "chunk_size": 100, "by_category": {"urls": urls}, "by_type": {},
+    }), encoding="utf-8")
+    tools = get_agent_tools("string_artifact_analyst", "pk", "run", "unused", "minimal")
+    reader = next(tool for tool in tools if tool.name == "read_strings_data")
+    result = reader.invoke({"command": "keyword=evil-c2"})
+    assert result["status"] == "success"
+    assert result["data"]["count"] == 1
+    assert "https://evil-c2.example.com/gate" in result["data"]["matched"]

@@ -157,12 +157,20 @@ def _make_extract_reader(tool_name: str, project_name: str, export_dir: str) -> 
 
 
 def _read_strings_keyword(project_name: str, export_dir: str, raw_filename: str, keyword: str) -> dict:
-    """按关键字过滤字符串：优先从预提取分片取全量文本，缺失时回退原始 strings.txt。"""
-    full = bb_read_extract("strings_extract", project_name, chunk_index=0)
-    if full.get("status") == "success":
-        # 预提取成功：从各分类中取全部条目的 text 做关键字过滤
+    """按关键字过滤字符串：直接读预提取全量 JSON（避免分片截断漏匹配），缺失时回退原始 strings.txt。"""
+    import json
+
+    from tools.blackboard_tools import board_path
+
+    path = board_path(project_name, "extracts", "strings_extract.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            return _error("read_error", ["next", "chunk=0", "keyword=<文本>"], str(exc))
         texts = []
-        for items in (full["data"].get("by_category") or {}).values():
+        for items in (data.get("by_category") or {}).values():
             for item in items:
                 if isinstance(item, dict):
                     texts.append(item.get("text") or item.get("raw") or str(item))
