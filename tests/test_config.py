@@ -73,3 +73,17 @@ def test_load_config_missing_and_empty(workdir):
     assert load_config() == {}
     _write_yaml(workdir, "")
     assert load_config() == {}
+
+
+def test_entry_tool_and_persistence_defaults():
+    from pathlib import Path
+
+    import yaml
+
+    data = yaml.safe_load(
+        (Path(__file__).parents[1] / "config.yaml").read_text(encoding="utf-8")
+    )
+    assert data["agents"]["tool_mode"] == "minimal"
+    assert data["blackboard"]["flush_every_writes"] == 20
+    assert data["blackboard"]["flush_interval_seconds"] == 5
+    assert data["blackboard"]["backup_limit"] == 10
