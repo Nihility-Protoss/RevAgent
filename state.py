@@ -1,89 +1,21 @@
-"""LangGraph 状态定义：结构化的 worker 输出 + AnalysisState TypedDict。"""
-from operator import add
-from typing import Annotated, Literal, TypedDict
-
-from pydantic import BaseModel, Field
-
-# ---- 枚举类型（与 worker 提示词中的取值约束一致）----
-ConfidenceLevel = Literal["high", "medium", "low"]
-AnalysisStatus = Literal["success", "insufficient_data"]
-SampleForm = Literal["exe_file_loader", "dll_plugin", "plain_exe", "unknown"]
-SampleLanguage = Literal["c_cpp", "rust", "golang", "unknown"]
+"""LangGraph 状态定义：收缩版 AnalysisState（控制字段 + 条目黑板引用）。"""
+from typing import TypedDict
 
 
-# ---- 各 worker 输出定义为 Pydantic 模型（根治 JSON 字符串状态）----
-class ArchDetection(BaseModel):
-    """arch_detection 子结构：样本编译语言/编译器/加壳方式/形态判定。"""
-
-    language: SampleLanguage = "unknown"
-    compiler_hints: list[str] = Field(default_factory=list)
-    packer_protector: list[str] = Field(default_factory=list)
-    sample_form: SampleForm = "unknown"
-    confidence: ConfidenceLevel = "low"
-    evidence: list[str] = Field(default_factory=list)
-
-
-class StringAnalysis(BaseModel):
-    """Phase 0 string_artifact_analyst 的结构化输出。"""
-
-    status: AnalysisStatus = "success"
-    sample_family_hints: list[str] = Field(default_factory=list)
-    file_loader_indicators: dict = Field(default_factory=dict)
-    pdb_analysis: dict = Field(default_factory=dict)
-    key_strings: list[dict] = Field(default_factory=list)
-    network_indicators: dict = Field(default_factory=dict)
-    persistence_indicators: dict = Field(default_factory=dict)
-    suspicious_patterns: list[dict] = Field(default_factory=list)
-    overall_assessment: str = ""
-    arch_detection: ArchDetection = Field(default_factory=ArchDetection)
-    recommended_next_steps: list[str] = Field(default_factory=list)
-
-
-class FuncCandidate(BaseModel):
-    """function_boundary_detector 推荐的单个候选函数。"""
-
-    func_addr: str = ""
-    func_name: str = ""
-    size: int = 0
-    xrefs: int = 0
-    is_thunk: bool = False
-    is_export: bool = False
-    analysis_priority: int = 0
-    priority_reason: str = ""
-
-
-class FunctionBoundaryAnalysis(BaseModel):
-    """Phase 1 function_boundary_detector 的结构化输出。"""
-
-    status: AnalysisStatus = "success"
-    total_functions: int = 0
-    filtered_functions: int = 0
-    candidates: list[FuncCandidate] = Field(default_factory=list)
-    recommended_top_n: int = 20
-    exclusion_notes: list[dict] = Field(default_factory=list)
-    export_functions_highlight: list[dict] = Field(default_factory=list)
-
-
-# ---- 图状态：只放小结构 + 黑板引用，不放 artifact 原文 ----
+# ---- 图状态：只保留控制字段，所有分析产物经条目黑板（versioned entries）通信 ----
 class AnalysisState(TypedDict, total=False):
-    """LangGraph 图状态（替代 ADK session.state 的 JSON 字符串）。"""
+    """LangGraph 图状态：仅承载运行控制字段，不再携带任何 worker payload。
+
+    各阶段的分析产物全部写入条目黑板（``data/output/{project}/entries/``），
+    节点之间通过 ``bb_build_context`` / ``bb_query_entries`` 按需读取；
+    Phase 4 的 reduce 节点只把最终报告的条目 id 写回 ``final_report_entry_id``。
+    """
 
     # 初始化参数
     sample_project_name: str
     sample_export_dir: str
     sample_type: str
     resume: bool  # True 时跳过 Phase -1 预提取（黑板已有 checkpoint）
-    # Phase 0/1/2 结构化输出（同名直译 output_key）
-    string_analysis: dict
-    api_behavior_analysis: dict
-    export_interface_analysis: dict
-    behavior_profile: dict
-    function_boundary_analysis: dict
-    scheduler_decision: dict
-    # HITL 人工审批节点写入的字段
-    phase2_human_decision: str
-    human_approved_functions: list[str]
-    # Phase 3/4：扇出结果用 reducer 聚合
-    func_analysis_refs: Annotated[list[dict], add]  # {"addr":..., "artifact":..., "summary_ref":...}
-    shard_reports: Annotated[list[dict], add]
-    final_report_ref: str
+    # 运行标识与最终产物引用
+    run_id: str  # 由 pre_extract 节点生成并持久化到黑板 runtime
+    final_report_entry_id: str  # Phase 4 reduce 节点写入的最终报告条目 id

@@ -18,9 +18,6 @@ from state import AnalysisState
 from tools.agent_tools import get_agent_tools
 from tools.blackboard_tools import (
     _now_iso,
-    bb_list_summaries,
-    bb_read_summary,
-    bb_write_summary,
     load_function_data,
 )
 from tools.entry_models import (
@@ -36,6 +33,7 @@ from tools.entry_tools import (
     bb_append_version,
     bb_build_context,
     bb_checkpoint,
+    bb_create_entry,
     bb_find_operation,
     bb_get_entry,
     bb_get_runtime,
@@ -403,10 +401,11 @@ def resolve_active_guides(project_name: str, arch_detection: Optional[dict] = No
 
 def resolve_guides_node(state: AnalysisState) -> dict:
     """依据 Phase 0 的 arch_detection 解析激活的知识指南。
+
+    arch_detection 直接查询黑板上最新的 sample 条目（Phase 0 字符串 Worker
+    的产物），不再读取图状态。
     """
-    string_analysis = state.get("string_analysis") or {}
-    arch = string_analysis.get("arch_detection") if isinstance(string_analysis, dict) else None
-    resolve_active_guides(state["sample_project_name"], arch_detection=arch)
+    resolve_active_guides(state["sample_project_name"])
     return {}
 
 
@@ -769,7 +768,7 @@ def make_phase3_node(llm=None):
     候选函数取自黑板上最新调度决策的 selected_function_refs（已由审批门审查）；
     每个函数的分析结果作为 change_reason=analysis 的版本追加到同一函数条目，
     幂等键为 ``{run_id}:phase3:function_deep_analyzer:{entry_id}``，重跑不产生
-    新的 LLM 调用。节点返回 {}，不再向图状态写 func_analysis_refs。
+    新的 LLM 调用。节点返回 {}，分析结果只落在条目版本上。
     """
 
     async def phase3_deep_analysis_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
@@ -837,107 +836,191 @@ def make_phase3_node(llm=None):
     return phase3_deep_analysis_node
 
 
-# === Phase 4: 综合报告（Map-Reduce，分片串行为小模型稳定性保留）===
+# === Phase 4: 综合报告（Map-Reduce，分片串行为小模型稳定性保留） ===
 
-def _read_phase01_summaries(project_name: str) -> dict:
-    """从黑板读取 Phase 0/1 的五份 summary。
-    """
-    return {
-        "p0_strings": bb_read_summary("strings_summary", project_name),
-        "p0_api": bb_read_summary("api_summary", project_name),
-        "p0_exports": bb_read_summary("exports_summary", project_name),
-        "p1_behavior": bb_read_summary("behavior_summary", project_name),
-        "p1_functions": bb_read_summary("functions_summary", project_name),
-    }
+# Phase 4 报告条目的幂等键公式：{run_id}:phase4:{agent}:{subject_key}
+_PHASE4_SHARD_AGENT = "shard_synthesis"
+_PHASE4_AGGREGATOR_AGENT = "aggregator"
+
+# 单个分片 / 聚合上下文一次 LLM 调用的输入上限
+_PHASE4_CONTEXT_BUDGET = 20000
 
 
-def _summary_data(summary: dict) -> dict:
-    return summary.get("data") if summary.get("status") == "success" else {}
+def _validate_worker_output(raw: Any) -> WorkerOutput:
+    """把模型原始输出校验为 WorkerOutput；失败时回退 parse_failed 占位。"""
+    try:
+        return WorkerOutput.model_validate(raw)
+    except Exception as exc:  # 结构化校验失败按 parse_failed 处理
+        return WorkerOutput(
+            status="parse_failed", conclusion=f"WorkerOutput 校验失败: {exc}",
+        )
 
 
 def make_shard_synthesis_node(llm=None):
-    """构建 Phase 4 的 map 节点：对可疑函数做分片综合。
+    """构建 Phase 4 的 map 节点：按页对 Phase 3 函数条目做分片综合。
+
+    每次读取 ``phase4_overview``（Phase 0/1 sample/finding）上下文与一页
+    ``phase4_shard``（Phase 3 函数条目，每页最多5个）上下文，两类条目作为
+    prompt JSON 输入；每个分片写一条 report 条目（
+    ``subject.key="shard:{index}"``、``payload.report_kind="shard"``），
+    ``relation_refs`` 记录当前页所有输入条目的精确版本（entry_id + version）。
+    幂等键 ``{run_id}:phase4:shard_synthesis:shard:{index}``：同一 run_id 重跑
+    直接返回已有 report，不重复调用 LLM、不产生新页。节点返回 {}。
     """
 
     async def shard_synthesis_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
         model = llm or get_llm()
         project = state["sample_project_name"]
-        s = _read_phase01_summaries(project)
-        p3_summaries = bb_list_summaries("phase3_funcs/", project)
+        run_id = _resolve_run_id(state)
 
-        # 只保留有可疑行为的函数，按优先级排序，最多 15 个
-        suspicious = [x for x in p3_summaries if x.get("suspicious_behaviors")]
-        suspicious.sort(key=lambda x: x.get("analysis_priority", 0), reverse=True)
-        suspicious = suspicious[:15]
+        overview = bb_build_context(
+            "phase4_overview", project, token_budget=_PHASE4_CONTEXT_BUDGET,
+        ).get("entries") or []
 
-        shard_size = 5
-        shards = [suspicious[i:i + shard_size] for i in range(0, len(suspicious), shard_size)]
-        shard_reports: list[dict] = []
-
-        for idx, shard in enumerate(shards):
-            shard_context = {
-                "phase0": {
-                    "strings": _summary_data(s["p0_strings"]),
-                    "api": _summary_data(s["p0_api"]),
-                    "exports": _summary_data(s["p0_exports"]),
-                },
-                "phase1": {
-                    "behavior": _summary_data(s["p1_behavior"]),
-                    "functions": _summary_data(s["p1_functions"]),
-                },
-                "phase3_shard": shard,
-                "shard_id": idx + 1,
-            }
-            resp = await invoke_guarded(
-                model,
-                [
-                    ("system", SHARD_SYNTHESIS_PROMPT),
-                    ("user", json.dumps(shard_context, ensure_ascii=False)),
-                ],
-                config=config,
+        cursor: Optional[str] = None
+        shard_index = 0
+        while True:
+            page = bb_build_context(
+                "phase4_shard", project, token_budget=_PHASE4_CONTEXT_BUDGET,
+                cursor=cursor,
             )
-            report = parse_json_loose(getattr(resp, "content", resp))
-            if report.get("parse_error"):
-                report["shard_id"] = idx + 1
-                report["status"] = "parse_failed"
-            shard_reports.append(report)
+            entries = page.get("entries") or []
+            if not entries:
+                break
+            shard_index += 1
+            subject_key = f"shard:{shard_index}"
+            op_key = f"{run_id}:phase4:{_PHASE4_SHARD_AGENT}:{subject_key}"
+            # 幂等：同 run 内该分片已综合则整体跳过（不发起 LLM 调用）
+            if not bb_find_operation(op_key, project).get("data"):
+                shard_context = {
+                    "overview": overview,
+                    "shard": entries,
+                    "shard_index": shard_index,
+                }
+                resp = await invoke_guarded(
+                    model,
+                    [
+                        ("system", SHARD_SYNTHESIS_PROMPT),
+                        ("user", json.dumps(shard_context, ensure_ascii=False)),
+                    ],
+                    config=config,
+                )
+                raw = parse_json_loose(getattr(resp, "content", resp))
+                output = _validate_worker_output(raw)
+                if output.status == "parse_failed":
+                    bb_log_event(
+                        "phase4_shard_parse_failed",
+                        {"shard_index": shard_index,
+                         "raw": str(raw.get("raw", ""))[:200]},
+                        project,
+                    )
+                else:
+                    relation_refs = [
+                        {"entry_id": item["entry_id"], "version": item["version"]}
+                        for item in entries
+                    ]
+                    bb_create_entry(
+                        "report", "report", subject_key,
+                        {
+                            "conclusion": output.conclusion,
+                            "confidence": output.confidence,
+                            "payload": {
+                                "report_kind": "shard",
+                                "shard_id": shard_index,
+                                **(output.payload or {}),
+                            },
+                            "evidence_refs": list(output.evidence_refs),
+                            "annotations": dict(output.annotations),
+                            "relation_refs": relation_refs,
+                        },
+                        {"phase": "phase4", "agent": _PHASE4_SHARD_AGENT, "run_id": run_id},
+                        project, op_key,
+                    )
+            cursor = page.get("next_cursor")
+            if cursor is None:
+                break
 
-        return {"shard_reports": shard_reports}
+        if shard_index == 0:
+            bb_log_event("phase4_no_functions", {"run_id": run_id}, project)
+        return {}
 
     return shard_synthesis_node
 
 
 def make_aggregator_node(llm=None):
-    """构建 Phase 4 的 reduce 节点：把各分片报告聚合为最终报告。
+    """构建 Phase 4 的 reduce 节点：把本 run 的分片报告聚合为最终报告。
+
+    读取 ``phase4_overview`` 与 ``phase4_aggregate``（本 run 的 shard report
+    条目），写 ``subject.key="final"``、``payload.report_kind="final"`` 的
+    report 条目，``relation_refs`` 指向全部输入条目的精确版本；幂等键
+    ``{run_id}:phase4:aggregator:final`` 保证同一 run 重跑不重复聚合。
+    节点只返回 ``{"final_report_entry_id": entry_id}``，随后
+    ``bb_checkpoint("phase4_complete")`` 强制落盘。
     """
 
     async def aggregator_node(state: AnalysisState, config: RunnableConfig = None) -> dict:
-        model = llm or get_llm()
         project = state["sample_project_name"]
-        s = _read_phase01_summaries(project)
+        run_id = _resolve_run_id(state)
+        op_key = f"{run_id}:phase4:{_PHASE4_AGGREGATOR_AGENT}:final"
 
-        aggregate_context = {
-            "shard_reports": state.get("shard_reports", []),
-            "phase0_summary": {
-                "strings": _summary_data(s["p0_strings"]),
-                "api": _summary_data(s["p0_api"]),
-                "exports": _summary_data(s["p0_exports"]),
-            },
-            "phase1_summary": {
-                "behavior": _summary_data(s["p1_behavior"]),
-            },
-        }
-        resp = await invoke_guarded(
-            model,
-            [
-                ("system", AGGREGATOR_PROMPT),
-                ("user", json.dumps(aggregate_context, ensure_ascii=False)),
-            ],
-            config=config,
-        )
-        report = parse_json_loose(getattr(resp, "content", resp))
-        bb_write_summary("p4_final_report", report, project)
+        found = bb_find_operation(op_key, project).get("data")
+        if found:
+            entry_id = found["entry_id"]
+        else:
+            model = llm or get_llm()
+            overview = bb_build_context(
+                "phase4_overview", project, token_budget=_PHASE4_CONTEXT_BUDGET,
+            ).get("entries") or []
+            shard_reports = bb_build_context(
+                "phase4_aggregate", project, token_budget=_PHASE4_CONTEXT_BUDGET,
+                run_id=run_id,
+            ).get("entries") or []
+
+            aggregate_context = {
+                "overview": overview,
+                "shard_reports": shard_reports,
+            }
+            resp = await invoke_guarded(
+                model,
+                [
+                    ("system", AGGREGATOR_PROMPT),
+                    ("user", json.dumps(aggregate_context, ensure_ascii=False)),
+                ],
+                config=config,
+            )
+            raw = parse_json_loose(getattr(resp, "content", resp))
+            output = _validate_worker_output(raw)
+            if output.status == "parse_failed":
+                # 聚合失败不静默：写 runtime 事件并抛出，避免产出空最终报告
+                bb_log_event(
+                    "phase4_aggregate_parse_failed",
+                    {"raw": str(raw.get("raw", ""))[:200]},
+                    project,
+                )
+                raise RuntimeError(f"Phase 4 聚合输出校验失败: {output.conclusion}")
+            relation_refs = [
+                {"entry_id": item["entry_id"], "version": item["version"]}
+                for item in overview + shard_reports
+            ]
+            created = bb_create_entry(
+                "report", "report", "final",
+                {
+                    "conclusion": output.conclusion,
+                    "confidence": output.confidence,
+                    "payload": {
+                        "report_kind": "final",
+                        **(output.payload or {}),
+                    },
+                    "evidence_refs": list(output.evidence_refs),
+                    "annotations": dict(output.annotations),
+                    "relation_refs": relation_refs,
+                },
+                {"phase": "phase4", "agent": _PHASE4_AGGREGATOR_AGENT, "run_id": run_id},
+                project, op_key,
+            )
+            entry_id = created["data"]["entry_id"]
+
         bb_checkpoint("phase4_complete", project)
-        return {"final_report_ref": "bb://summary/p4_final_report"}
+        return {"final_report_entry_id": entry_id}
 
     return aggregator_node

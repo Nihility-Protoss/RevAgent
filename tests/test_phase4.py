@@ -2,7 +2,7 @@
 
 ADK agents（synthesis_shard / synthesis_aggregator）已移除；Phase 4 现在由
 graph 节点（make_shard_synthesis_node / make_aggregator_node）驱动，使用此处断言的
-prompt 常量。
+prompt 常量。两个 prompt 都输出 WorkerOutput 外壳：业务字段放入 ``payload.details``。
 """
 from workers.phase4.synthesis_agent import AGGREGATOR_PROMPT, SHARD_SYNTHESIS_PROMPT
 
@@ -11,7 +11,7 @@ def test_shard_synthesis_prompt_is_preserved():
     """Phase 4 Map 步骤需要带局部分析模式的 shard prompt。
     """
     assert "局部分析模式" in SHARD_SYNTHESIS_PROMPT
-    assert "shard_id" in SHARD_SYNTHESIS_PROMPT
+    assert "payload.details" in SHARD_SYNTHESIS_PROMPT
 
 
 def test_aggregator_prompt_is_preserved():
@@ -20,6 +20,7 @@ def test_aggregator_prompt_is_preserved():
     assert "汇总模式" in AGGREGATOR_PROMPT
     assert "malware_family" in AGGREGATOR_PROMPT
     assert "uncertainties" in AGGREGATOR_PROMPT
+    assert "payload.details" in AGGREGATOR_PROMPT
 
 
 def test_aggregator_prompt_requires_uncertainties():

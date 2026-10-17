@@ -10,6 +10,9 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+import graph  # 延迟到模块级导入，便于测试 monkeypatch graph.build_graph
+from tools.entry_store import shutdown_stores
+
 load_dotenv()
 
 
@@ -31,7 +34,6 @@ async def run_analysis_with_blackboard(
     Returns:
         (final_state, token_report) 元组。
     """
-    from graph import build_graph
     from observability import TokenStatsCallback
     from tools.file_loaders import resolve_export_dir
 
@@ -45,8 +47,8 @@ async def run_analysis_with_blackboard(
             )
         sample_export_dir = resolved["export_dir"]
 
-    graph = build_graph()
-    graph.get_graph().draw_mermaid_png(output_file_path="data/graph.png")
+    app = graph.build_graph()
+    app.get_graph().draw_mermaid_png(output_file_path="data/graph.png")
     token_callback = TokenStatsCallback(sample_project_name)
 
     initial_state = {
@@ -55,13 +57,16 @@ async def run_analysis_with_blackboard(
         "resume": resume,
     }
 
-    final_state = await graph.ainvoke(
-        initial_state,
-        config={"callbacks": [token_callback]},
-    )
-
-    print(str(token_callback.report))
-    return final_state, token_callback.report
+    try:
+        final_state = await app.ainvoke(
+            initial_state,
+            config={"callbacks": [token_callback]},
+        )
+        print(str(token_callback.report))
+        return final_state, token_callback.report
+    finally:
+        # 即使 LLM 或 HITL 异常也强制落盘脏数据，避免条目丢失
+        shutdown_stores()
 
 
 def main() -> None:

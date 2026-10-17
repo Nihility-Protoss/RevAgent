@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import tempfile
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -19,8 +20,11 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult, LLMResult
 
+import graph
 import graph_nodes
+import main
 from graph import build_graph
+from state import AnalysisState
 from graph_nodes import (
     _load_active_guides_text,
     build_review_message,
@@ -152,20 +156,35 @@ FUNC_ANALYSIS_JSON = json.dumps({
 }, ensure_ascii=False)
 
 SHARD_JSON = json.dumps({
-    "shard_id": 1, "status": "success",
-    "suspicious_functions_summary": ["0x401000: C2"],
-    "key_iocs": {"urls": [], "files": [], "registry": []},
-    "behavior_pattern": "网络通信", "confidence": "medium",
-    "uncertainties": ["样本量小"],
+    "status": "success", "conclusion": "局部行为模式: 网络通信",
+    "confidence": "medium",
+    "payload": {
+        "details": {
+            "suspicious_functions_summary": ["0x401000: C2"],
+            "key_iocs": {"urls": [], "files": [], "registry": []},
+            "uncertainties": ["样本量小"],
+        },
+    },
+    "evidence_refs": ["decompile:0x401000"],
+    "annotations": {},
 }, ensure_ascii=False)
 
 FINAL_JSON = json.dumps({
-    "status": "success", "malware_family": "Unknown", "confidence": "medium",
-    "behavior_summary": "Stealer 行为",
-    "key_iocs": {"urls": [], "files": [], "registry": []},
-    "analyzed_functions": {"total": 1, "suspicious": 1, "key_functions": ["0x401000"]},
-    "breakpoint_recommendations": {"P0": [], "P1": [], "P2": []},
-    "uncertainties": ["假数据"], "recommendations": ["动态调试确认"],
+    "status": "success", "conclusion": "总体行为摘要: Stealer 行为",
+    "confidence": "medium",
+    "payload": {
+        "details": {
+            "malware_family": "Unknown",
+            "behavior_summary": "Stealer 行为",
+            "key_iocs": {"urls": [], "files": [], "registry": []},
+            "analyzed_functions": {"total": 1, "suspicious": 1, "key_functions": ["0x401000"]},
+            "breakpoint_recommendations": {"P0": [], "P1": [], "P2": []},
+            "uncertainties": ["假数据"],
+            "recommendations": ["动态调试确认"],
+        },
+    },
+    "evidence_refs": [],
+    "annotations": {},
 }, ensure_ascii=False)
 
 # 统计每个模型调用由哪个脚本分支应答；冒烟测试断言每个预期分支都被触发、没有落到兜底分支。
@@ -700,66 +719,106 @@ def test_worker_nodes_return_empty_and_write_entries(tmp_path, monkeypatch):
     assert "unmatched" not in _CALL_COUNTS
 
 
+# === Phase 4 报告条目化（无 State 分片，relation_refs 精确溯源） =======================
+
+def _make_phase3_function(project, run_id):
+    return bb_create_entry(
+        "function", "asm_address", "0x401000",
+        {"conclusion": "网络初始化", "confidence": "medium",
+         "payload": {"func_name": "sub_401000", "candidate": {"priority": 9},
+                     "analysis": {"functionality": "network_init",
+                                  "suspicious_behaviors": [{"behavior": "C2 connect"}]}},
+         "evidence_refs": ["decompile:0x401000"],
+         "annotations": {"recommended_name": "init_network"}, "relation_refs": []},
+        {"phase": "phase3", "agent": "function_deep_analyzer", "run_id": run_id},
+        project, f"{run_id}:phase3:function_deep_analyzer:0x401000",
+    )
+
+
+def test_phase4_reports_are_entries_with_source_refs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _make_phase3_function("proj", "run-1")
+    shard_node = graph_nodes.make_shard_synthesis_node(llm=ScriptedFakeChatModel())
+    assert asyncio.run(shard_node({"sample_project_name": "proj", "run_id": "run-1"})) == {}
+    shards = bb_query_entries("proj", {
+        "entry_type": "report", "payload.report_kind": "shard",
+    })["data"]
+    assert len(shards) == 1
+    assert shards[0]["versions"][0]["relation_refs"][0]["version"] >= 1
+
+    aggregate_node = graph_nodes.make_aggregator_node(llm=ScriptedFakeChatModel())
+    result = asyncio.run(aggregate_node({"sample_project_name": "proj", "run_id": "run-1"}))
+    final = bb_get_entry(result["final_report_entry_id"], "proj")["data"]
+    assert final["entry_type"] == "report"
+    assert final["versions"][0]["payload"]["report_kind"] == "final"
+    assert final["versions"][0]["payload"]["details"]["malware_family"] == "Unknown"
+    assert not (tmp_path / "data" / "output" / "proj" / "summary").exists()
+
+
+# === 图状态白名单与运行退出落盘 ==========================================================
+
+
+def test_analysis_state_contains_only_control_fields():
+    assert set(AnalysisState.__annotations__) == {
+        "sample_project_name", "sample_export_dir", "sample_type",
+        "resume", "run_id", "final_report_entry_id",
+    }
+
+
+def test_run_analysis_calls_shutdown_on_error(monkeypatch):
+    calls = []
+
+    class FailingGraph:
+        def get_graph(self):
+            return SimpleNamespace(draw_mermaid_png=lambda output_file_path: None)
+
+        async def ainvoke(self, state, config):
+            raise RuntimeError("stop")
+
+    monkeypatch.setattr(graph, "build_graph", lambda: FailingGraph())
+    monkeypatch.setattr(main, "shutdown_stores", lambda: calls.append(True))
+    with pytest.raises(RuntimeError, match="stop"):
+        asyncio.run(main.run_analysis_with_blackboard(
+            "proj", sample_export_dir="unused",
+        ))
+    assert calls == [True]
+
+
 # === 端到端编排冒烟测试 =======================================================================
 
 def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
-    """离线运行整张图：pre_extract → Phase 0→4，HITL 回复 CONFIRM。
-
-    断言终态字段、知识路由、blackboard（黑板）artifact 与最终报告；
-    假模型的每个脚本分支都必须被触发。
-    """
     _CALL_COUNTS.clear()
     export_dir = _make_export_dir(str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "CONFIRM")
-
-    graph = build_graph(llm=ScriptedFakeChatModel())
-    final_state = asyncio.run(graph.ainvoke({
+    final_state = asyncio.run(build_graph(llm=ScriptedFakeChatModel()).ainvoke({
         "sample_project_name": "test_proj",
         "sample_export_dir": export_dir,
         "sample_type": "auto",
     }))
-
-    # 每个 worker + phase3/4 分支都至少应答过一次调用，且没有调用落到通用兜底分支。
-    assert _CALL_COUNTS.get("unmatched", 0) == 0
-    for branch in [
+    assert set(final_state) <= {
+        "sample_project_name", "sample_export_dir", "sample_type",
+        "resume", "run_id", "final_report_entry_id",
+    }
+    for branch in (
         "string_analyst", "api_profiler", "export_analyzer",
         "behavior_synthesizer", "boundary_detector", "scheduler",
         "phase3", "shard", "aggregator",
-    ]:
-        assert _CALL_COUNTS.get(branch, 0) >= 1, f"fake model branch never fired: {branch}"
-
-    # 终态携带每个阶段的关键输出。
-    assert final_state["sample_type"] == "pe"  # pre_extract 节点自动检测（imports+exports 齐全）
-    assert final_state["scheduler_decision"]["action"] == "AWAITING_HUMAN_REVIEW"
-    assert final_state["phase2_human_decision"] == "CONFIRM"
-    assert final_state["final_report_ref"] == "bb://summary/p4_final_report"
-    assert len(final_state["shard_reports"]) == 1
-    assert len(final_state["func_analysis_refs"]) == 1
-    assert final_state["func_analysis_refs"][0]["addr"] == "0x401000"
-
-    # Phase 0 的 arch_detection 把 rust 知识指南路由了进来。
-    with open(board_base_dir() + "/test_proj/meta/active_guides.json", encoding="utf-8") as f:
-        guide_names = [g["name"] for g in json.load(f)["guides"]]
-    assert guide_names[0] == "windows_pe"
-    assert "rust" in guide_names
-
-    # blackboard（黑板）持久化：artifact、各阶段 summary、最终报告。
-    board = os.path.join(board_base_dir(), "test_proj")
-    assert os.path.exists(os.path.join(board, "extracts", "strings_extract.json"))
-    assert os.path.exists(os.path.join(board, "artifacts", "phase3_func_0x401000.json"))
-    for summary_name in [
-        "strings_summary", "api_summary", "exports_summary",
-        "behavior_summary", "functions_summary", "p4_final_report",
-    ]:
-        assert os.path.exists(os.path.join(board, "summary", f"{summary_name}.json")), summary_name
-    with open(os.path.join(board, "summary", "p4_final_report.json"), encoding="utf-8") as f:
-        final_report = json.load(f)
-    assert final_report["malware_family"] == "Unknown"
+    ):
+        assert _CALL_COUNTS.get(branch, 0) >= 1, branch
+    assert "extractor" not in _CALL_COUNTS
+    assert "unmatched" not in _CALL_COUNTS
+    report = bb_get_entry(final_state["final_report_entry_id"], "test_proj")["data"]
+    assert report["versions"][0]["payload"]["details"]["malware_family"] == "Unknown"
+    board = tmp_path / "data" / "output" / "test_proj"
+    assert (board / "entries" / "store.pickle").exists()
+    assert not (board / "artifacts").exists()
+    assert not (board / "summary").exists()
+    assert not (board / "meta").exists()
 
 
 def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
-    """MODIFY 回复必须把 Phase 3 限制在人工批准的地址范围内。"""
+    """MODIFY 回复必须把 Phase 3 限制在人工批准的地址范围内（全部走条目黑板）。"""
     _CALL_COUNTS.clear()
     export_dir = _make_export_dir(str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -768,19 +827,22 @@ def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
         lambda message: "MODIFY 0x401000,0x409999",
     )
 
-    graph = build_graph(llm=ScriptedFakeChatModel())
-    final_state = asyncio.run(graph.ainvoke({
+    asyncio.run(build_graph(llm=ScriptedFakeChatModel()).ainvoke({
         "sample_project_name": "test_proj",
         "sample_export_dir": export_dir,
         "sample_type": "auto",
     }))
 
-    assert final_state["phase2_human_decision"] == "MODIFY 0x401000,0x409999"
-    assert final_state["human_approved_functions"] == ["0x401000", "0x409999"]
-    # 边界候选中只有 0x401000 存在，因此只有它会被分析。
-    assert final_state["func_analysis_refs"][0]["addr"] == "0x401000"
-    assert "summary" in final_state["func_analysis_refs"][0]
-    assert final_state["final_report_ref"] == "bb://summary/p4_final_report"
+    decision = bb_query_entries("test_proj", {"entry_type": "decision"})["data"][0]
+    selected = decision["versions"][0]["payload"]["selected_function_refs"]
+    assert decision["versions"][0]["payload"]["summary"]["unknown_addresses"] == ["0x409999"]
+    # 边界候选中只有 0x401000 存在，因此只有它会被深度分析。
+    assert len(selected) == 1
+    analyzed = bb_get_entry(selected[0]["entry_id"], "test_proj", include_history=True)["data"]
+    assert analyzed["subject"]["key"] == "0x401000"
+    assert analyzed["versions"][-1]["producer"]["phase"] == "phase3"
+    funcs = bb_query_entries("test_proj", {"entry_type": "function"})["data"]
+    assert len(funcs) == 1 and funcs[0]["subject"]["key"] == "0x401000"
 
 
 # === 上下文预算（128k） =================================================================
