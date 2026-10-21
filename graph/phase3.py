@@ -26,7 +26,6 @@ from tools.entry_tools import (
     bb_find_operation,
     bb_get_entry,
     bb_log_event,
-    bb_query_entries,
 )
 from workers.phase3.function_deep_analyzer import build_func_analysis_prompt
 

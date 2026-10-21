@@ -11,10 +11,10 @@
 系统基于 LangGraph 编排，整体流程为：**预提取 → 快速定性 → 行为定型与函数筛选 → 调度与人工审查 → 函数级深度分析 → 综合报告**。
 
 - `main.py`：运行入口，负责参数解析与分析流程启动。
-- `graph.py`、`graph_nodes.py`：定义各阶段节点、流转关系和人工审批环节。
+- `graph/` 包（`builder.py` / `gates.py` / `workers.py` / `phase3.py` / `phase4.py`）：定义各阶段节点、流转关系和人工审批环节。
 - `workers/`：包含各阶段的 Worker 定义、提示词和专项分析知识。
 - `tools/`：提供输入文件加载、黑板读写、检查点和 Token 统计等工具。
-- `state.py`：定义图状态及各 Agent 的结构化输出模型。
+- `graph/state.py`：定义图状态及各 Agent 的结构化输出模型。
 - `config.py`、`config.yaml`：管理模型、路径和分析参数。
 - `data/input/`：存放 IDA 导出的样本分析数据。
 - `data/output/`：作为黑板保存两类数据——`extracts/`（Phase -1 预提取分片）与 `entries/`（版本化条目库，内存态经 `store.pickle` 原子快照持久化）。所有 Worker 产物以带完整版本历史的条目形式写入条目库，节点间经上下文构建按需读取，支持阶段间通信与断点续跑。

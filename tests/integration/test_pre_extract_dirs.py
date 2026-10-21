@@ -1,3 +1,4 @@
+"""Phase -1 预提取的目录结构与分片产物测试（依赖 fixture）。"""
 import os
 import json
 import tempfile
@@ -11,7 +12,9 @@ from tools.file_loaders import pre_extract_sample
 def test_pre_extract_creates_extracts():
     """预提取应创建全部 extract JSON 文件。
     """
-    fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "input", "module.upx_export_for_ai")
+    fixture_dir = os.path.join(
+        os.path.dirname(__file__), "..", "..", "data", "input", "module.upx_export_for_ai"
+    )
     if not os.path.exists(fixture_dir):
         pytest.skip("Fixture data not found")
 
@@ -35,7 +38,9 @@ def test_pre_extract_creates_extracts():
 def test_pre_extract_strings_structure():
     """strings_extract.json 必须包含预期的分类。
     """
-    fixture_dir = os.path.join(os.path.dirname(__file__), "..", "data", "input", "module.upx_export_for_ai")
+    fixture_dir = os.path.join(
+        os.path.dirname(__file__), "..", "..", "data", "input", "module.upx_export_for_ai"
+    )
     if not os.path.exists(fixture_dir):
         pytest.skip("Fixture data not found")
 
@@ -54,3 +59,23 @@ def test_pre_extract_strings_structure():
         assert "by_category" in data
         assert "chunks" in data
         assert isinstance(data["chunks"], int)
+
+
+def test_blackboard_directory_structure():
+    """执行 pre-extract 应创建 data/output 目录结构。"""
+    fixture_dir = os.path.join(
+        os.path.dirname(__file__), "..", "..", "data", "input", "module.upx_export_for_ai"
+    )
+    if not os.path.exists(fixture_dir):
+        pytest.skip("Fixture data not found")
+
+    orig_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.chdir(tmpdir)
+        try:
+            result = pre_extract_sample(fixture_dir, "test_project")
+            assert result["status"] == "success"
+            assert os.path.exists(os.path.join(board_base_dir(), "test_project", "extracts"))
+            assert os.path.exists(os.path.join(board_base_dir(), "test_project", "extracts", "strings_extract.json"))
+        finally:
+            os.chdir(orig_cwd)

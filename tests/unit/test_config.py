@@ -81,7 +81,7 @@ def test_entry_tool_and_persistence_defaults():
     import yaml
 
     data = yaml.safe_load(
-        (Path(__file__).parents[1] / "config.yaml").read_text(encoding="utf-8")
+        (Path(__file__).parents[2] / "config.yaml").read_text(encoding="utf-8")
     )
     assert data["agents"]["tool_mode"] == "minimal"
     assert data["blackboard"]["flush_every_writes"] == 20

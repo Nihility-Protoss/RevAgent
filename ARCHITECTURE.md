@@ -70,7 +70,7 @@ END
 
 ### 2.1 图编排说明
 
-唯一的编排定义处是 `graph.py` 的 `build_graph(llm=None, checkpointer=None)`，使用 `langgraph.graph.StateGraph` 的边定义语法：
+唯一的编排定义处是 `graph/builder.py` 的 `build_graph(llm=None, checkpointer=None)`，使用 `langgraph.graph.StateGraph` 的边定义语法：
 
 ```python
 from langgraph.graph import END, START, StateGraph
@@ -103,7 +103,7 @@ return builder.compile(checkpointer=checkpointer)
 
 ## 3. Worker Agent 设计
 
-Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`WorkerSpec` frozen dataclass**（`name` / `instruction` / `output_schema`），由 `graph_nodes.make_worker_node` 编译为 LangGraph 节点函数。节点内通过 `langchain.agents.create_agent` 构建 ReAct Agent（`response_format=output_schema` 结构化输出，失败时回退 `parse_json_loose` 容错解析），完成后在同一节点内经 `bb_write_worker_output` 把结构化输出**投影为版本化条目**（样本级发现、函数候选、调度决策等），Worker 节点一律返回 `{}`，分析产物不回流图状态。
+Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`WorkerSpec` frozen dataclass**（`name` / `instruction` / `output_schema`），由 `graph.workers.make_worker_node` 编译为 LangGraph 节点函数。节点内通过 `langchain.agents.create_agent` 构建 ReAct Agent（`response_format=output_schema` 结构化输出，失败时回退 `parse_json_loose` 容错解析），完成后在同一节点内经 `bb_write_worker_output` 把结构化输出**投影为版本化条目**（样本级发现、函数候选、调度决策等），Worker 节点一律返回 `{}`，分析产物不回流图状态。
 
 提示词仍使用统一的**五段式提示词结构**（常量保留在各 `workers/phaseX/*.py` 原模块，文本未改）：
 1. **角色定义段**：专业身份和分析范围
@@ -141,12 +141,12 @@ Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`
 
 #### Human Review Gate（approval_gate）
 
-- **位置**: `graph_nodes.py` 的 `approval_gate_node` 节点（Phase 2→3 之间）
+- **位置**: `graph/gates.py` 的 `approval_gate_node` 节点（Phase 2→3 之间）
 - **触发时机**: Scheduler 完成后
 - **交互方式**: CLI `input()` 逐行读取人工回复（`prompt_human` 为模块级函数，便于测试 monkeypatch）；LangGraph `interrupt()` 化留待 Step 2
 - **审查内容**: 行为定型结论、高风险字符串/API 指标计数、Top 20 候选函数（由条目库读取并渲染）
 - **回复协议**:
-  - `CONFIRM` — 同意继续，使用调度决策条目当前的 `selected_function_refs`（scheduler 推荐的候选函数精确版本引用，见 `graph_nodes.approval_gate_node`）
+  - `CONFIRM` — 同意继续，使用调度决策条目当前的 `selected_function_refs`（scheduler 推荐的候选函数精确版本引用，见 `graph.gates.approval_gate_node`）
   - `MODIFY <addr1>,<addr2>,...` — 指定要分析的函数地址列表，逗号分隔
   - 连续 3 次无法识别的回复后默认按 CONFIRM 放行
 - **HITL 版本审查**: 人工决定不直接改条目内容，而是经 `bb_review_entries` 追加 review 版本（携带 `ReviewStatus`、reviewer、note），保留原始 Worker 结论与人工裁定的完整审计链；不存在的地址记入 decision payload 的 `unknown_addresses`，不创建函数条目。
@@ -155,7 +155,7 @@ Worker 的框架无关定义在 `workers/specs.py`：每个 Worker 是一个 **`
 ### 3.4 知识指南注入（Phase 0→1 门控）
 
 - **来源**: Phase 0 字符串分析输出 `arch_detection`（架构/语言/加载方式）。
-- **路由**: `graph_nodes.resolve_guides_node` / `resolve_active_guides` 读取 Worker 输出中的 `arch_detection`，匹配 `workers/knowledge/` 知识库，将激活的指南元数据写入条目库 runtime（`bb_set_runtime`）。
+- **路由**: `graph.gates.resolve_guides_node` / `resolve_active_guides` 读取 Worker 输出中的 `arch_detection`，匹配 `workers/knowledge/` 知识库，将激活的指南元数据写入条目库 runtime（`bb_set_runtime`）。
 - **消费**: Phase 1 经 `load_arch_guide("__active__")` 按需加载激活指南并注入 prompt；Phase 3 由 `_load_active_guides_text` 拼接全文注入函数分析 prompt。
 - **默认回退**: `arch_detection` 缺失时回退到默认指南 `windows_pe`。
 
@@ -212,7 +212,7 @@ Agent 接收一个**样本导出目录**作为输入：
 
 ### 5.1 AnalysisState 字段规范
 
-图状态定义在 `state.py` 的 `AnalysisState(TypedDict, total=False)`。**只保留六个控制字段**，所有分析产物经条目黑板（`data/output/{project}/entries/`）通信：
+图状态定义在 `graph/state.py` 的 `AnalysisState(TypedDict, total=False)`。**只保留六个控制字段**，所有分析产物经条目黑板（`data/output/{project}/entries/`）通信：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -234,7 +234,7 @@ Agent 接收一个**样本导出目录**作为输入：
 
 ### 5.2 Token 统计
 
-`observability.py` 的 `TokenStatsCallback(BaseCallbackHandler)` 挂在 LangChain callback 上，按 `langgraph_node` metadata 将每次 LLM 调用归并到所属图节点，**覆盖全部阶段（含 Phase 3/4）**。聚合结果为 `tools/token_stats.py` 的 `AnalysisTokenReport`（`add_usage(stage_name, prompt, candidate, total)`，输出格式与旧版 `to_dict()` 兼容）。
+`graph/observability.py` 的 `TokenStatsCallback(BaseCallbackHandler)` 挂在 LangChain callback 上，按 `langgraph_node` metadata 将每次 LLM 调用归并到所属图节点，**覆盖全部阶段（含 Phase 3/4）**。聚合结果为 `tools/token_stats.py` 的 `AnalysisTokenReport`（`add_usage(stage_name, prompt, candidate, total)`，输出格式与旧版 `to_dict()` 兼容）。
 
 `main.run_analysis_with_blackboard()` 返回 `(final_state, token_report)`：
 
@@ -253,7 +253,7 @@ print(str(token_report))                # 人类可读报告
 所有 agent 的单次 LLM 调用输入上限为 **128k tokens**（`config.yaml` 的 `llm.max_context_tokens`，环境变量 `MAX_CONTEXT_TOKENS` 兜底）：
 
 - **Worker（ReAct 循环）**：`create_agent` 挂 `SummarizationMiddleware`，历史消息估算超过 128k 的 75% 时自动摘要压缩，保留最近 20 条消息。
-- **直接 LLM 调用**（Phase 3 / Phase 4）：统一走 `graph_nodes.invoke_guarded`，调用前 `enforce_context_budget` 估算 token，超限时从最长消息开始头尾保留式截断，截断后仍超限则抛 `RuntimeError`。
+- **直接 LLM 调用**（Phase 3 / Phase 4）：统一走 `graph.runtime.invoke_guarded`，调用前 `enforce_context_budget` 估算 token，超限时从最长消息开始头尾保留式截断，截断后仍超限则抛 `RuntimeError`。
 
 ---
 
@@ -262,11 +262,16 @@ print(str(token_report))                # 人类可读报告
 ```
 multi-agent-adk/
 ├── main.py                           # 运行时入口：CLI 参数解析 + run_analysis_with_blackboard
-├── graph.py                          # 唯一编排定义处：build_graph(llm, checkpointer) StateGraph 组装
-├── graph_nodes.py                    # 节点工厂与业务节点：make_worker_node / pre_extract /
-│                                     #   resolve_guides / approval_gate / phase3 / shard / aggregator
-├── state.py                          # AnalysisState(TypedDict)：六个控制字段（见 5.1）
-├── observability.py                  # TokenStatsCallback：按 langgraph_node 聚合 token 用量
+├── graph/                            # 编排包
+│   ├── __init__.py                   # 导出 build_graph
+│   ├── builder.py                    # 唯一编排定义处：build_graph(llm, checkpointer) StateGraph 组装
+│   ├── gates.py                      # 门控节点：pre_extract / resolve_guides / approval_gate
+│   ├── workers.py                    # make_worker_node 节点工厂与产物投影
+│   ├── phase3.py                     # make_phase3_node：函数级深度分析（节点内串行循环）
+│   ├── phase4.py                     # shard / aggregator 节点（Map-Reduce）
+│   ├── runtime.py                    # get_llm/set_llm、invoke_guarded、上下文预算、JSON 容错解析
+│   ├── state.py                      # AnalysisState(TypedDict)：六个控制字段（见 5.1）
+│   └── observability.py              # TokenStatsCallback：按 langgraph_node 聚合 token 用量
 ├── config.py                         # 全局配置读写入口（config.yaml 加载，CLI > yaml > env > 默认值）
 ├── config.yaml                       # 全局配置：llm / paths / analysis
 ├── pyproject.toml                    # 项目依赖 + pytest 配置
@@ -306,6 +311,10 @@ multi-agent-adk/
 │   │   └── module.upx_export_for_ai/ # 示例 fixture
 │   └── output/                       # 输出（黑板）：{project_name}/{extracts,entries/store.pickle}
 └── tests/                            # 测试（编排层通过假模型注入 + graph.ainvoke 离线运行）
+    ├── conftest.py                   # 公共 fixture：每个测试后关闭条目库
+    ├── fake_llm.py                   # 共享的脚本化假聊天模型与最小 IDA 导出 fixture
+    ├── unit/                         # 单元测试（tools / workers / graph 分层）
+    └── integration/                  # 端到端、HITL、预提取目录、故障恢复
 ```
 
 ---
@@ -317,10 +326,10 @@ multi-agent-adk/
 | 扩展项 | 说明 | 预计改动 |
 |-------|------|---------|
 | **技能知识精修** | 将 `arch_windows_pe.md` 中的专项分析知识（DLL插件型/文件加载型/API哈希动态解析等）精修进各 Worker 提示词 | `workers/phase0/*.py`, `workers/phase1/*.py` |
-| **函数级深度分析** ✅ 已落地 | 对候选函数进行逐函数汇编级分析 | `graph_nodes.make_phase3_node`（节点内串行循环） |
+| **函数级深度分析** ✅ 已落地 | 对候选函数进行逐函数汇编级分析 | `graph.phase3.make_phase3_node`（节点内串行循环） |
 | **Worker output_schema 化** ✅ 已落地 | WorkerSpec 声明 `output_schema`（`WorkerOutput`，Pydantic），根治 JSON 字符串状态 | `workers/specs.py`、`tools/entry_models.py` |
-| **Phase 3 并行扇出** | 用 LangGraph `Send` 将逐函数分析扇出为真并行 | `graph.py` + `graph_nodes.py`（Step 3 待办） |
-| **SqliteSaver + interrupt()** | checkpointer 持久化图状态，HITL 用 `interrupt()` 恢复而非 CLI 阻塞 | `graph.py`、`main.py`（Step 2 待办） |
+| **Phase 3 并行扇出** | 用 LangGraph `Send` 将逐函数分析扇出为真并行 | `graph/builder.py` + `graph/phase3.py`（Step 3 待办） |
+| **SqliteSaver + interrupt()** | checkpointer 持久化图状态，HITL 用 `interrupt()` 恢复而非 CLI 阻塞 | `graph/builder.py`、`main.py`（Step 2 待办） |
 
 ### P2 — 中优先级
 
