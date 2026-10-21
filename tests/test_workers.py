@@ -1,7 +1,7 @@
 """workers.specs 测试：WorkerSpec 纯数据定义（统一 WorkerOutput 契约）。
 
 每个 worker 是一个 frozen WorkerSpec（name/instruction/output_schema），
-由 graph_nodes.make_worker_node 编译为 graph 节点；工具集不再声明在 spec 上，
+由 graph.workers.make_worker_node 编译为 graph 节点；工具集不再声明在 spec 上，
 由 tools.agent_tools.get_agent_tools 按角色动态注入（本文件按 minimal 模式断言）。
 """
 import dataclasses

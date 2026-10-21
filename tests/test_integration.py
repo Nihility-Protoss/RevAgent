@@ -1,6 +1,6 @@
 """LangGraph 编排层的集成测试（ADK 迁移之后）。
 
-纯逻辑用例已从旧的 ADK orchestrator 测试迁移到 graph_nodes；
+纯逻辑用例已从旧的 ADK orchestrator 测试迁移到 graph 包；
 编排通过 build_graph(llm=fake) 配合脚本化的假聊天模型端到端执行，
 不消耗任何真实 API token。
 """
@@ -21,17 +21,20 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult, LLMResult
 
 import graph
-import graph_nodes
+import graph.gates
+import graph.phase3
+import graph.phase4
+import graph.workers
 import main
 from graph import build_graph
-from state import AnalysisState
-from graph_nodes import (
+from graph.observability import TokenStatsCallback
+from graph.state import AnalysisState
+from graph.gates import (
     _load_active_guides_text,
     build_review_message,
     parse_approval_reply,
     resolve_active_guides,
 )
-from observability import TokenStatsCallback
 from tools.blackboard_tools import board_base_dir
 from tools.entry_tools import (
     bb_checkpoint,
@@ -437,11 +440,11 @@ def test_parse_approval_reply_invalid():
 
 
 def test_approval_gate_node_confirm_via_prompt_human(tmp_path, monkeypatch):
-    """approval_gate_node 必须通过 graph_nodes.prompt_human 读取回复，CONFIRM 走审查写入。"""
+    """approval_gate_node 必须通过 graph.gates.prompt_human 读取回复，CONFIRM 走审查写入。"""
     monkeypatch.chdir(tmp_path)
     _make_boundary_and_decision("proj", "run-1")
-    monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "CONFIRM")
-    result = graph_nodes.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
+    monkeypatch.setattr(graph.gates, "prompt_human", lambda message: "CONFIRM")
+    result = graph.gates.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
     assert result == {}
     reviewed = bb_query_entries("proj", {"entry_type": "function"})["data"][0]
     assert reviewed["versions"][0]["review"]["status"] == "confirmed"
@@ -452,8 +455,8 @@ def test_approval_gate_node_defaults_to_confirm_after_invalid_replies(tmp_path, 
     monkeypatch.chdir(tmp_path)
     _make_boundary_and_decision("proj", "run-1")
     replies = iter(["nope", "what?", "???"])
-    monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: next(replies))
-    result = graph_nodes.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
+    monkeypatch.setattr(graph.gates, "prompt_human", lambda message: next(replies))
+    result = graph.gates.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
     assert result == {}
     reviewed = bb_query_entries("proj", {"entry_type": "function"})["data"][0]
     assert reviewed["versions"][0]["review"]["status"] == "confirmed"
@@ -481,9 +484,9 @@ def test_phase3_appends_to_candidate_without_state_payload(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     _make_boundary_and_decision("proj", "run-1")
     before = bb_query_entries("proj", {"entry_type": "function"})["data"][0]
-    monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "CONFIRM")
+    monkeypatch.setattr(graph.gates, "prompt_human", lambda message: "CONFIRM")
 
-    result = graph_nodes.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
+    result = graph.gates.approval_gate_node({"sample_project_name": "proj", "run_id": "run-1"})
     assert result == {}
     reviewed = bb_get_entry(before["entry_id"], "proj")["data"]
     assert reviewed["versions"][0]["review"]["status"] == "confirmed"
@@ -492,7 +495,7 @@ def test_phase3_appends_to_candidate_without_state_payload(tmp_path, monkeypatch
         "sample_project_name": "proj", "sample_export_dir": _make_export_dir(str(tmp_path)),
         "run_id": "run-1",
     }
-    node = graph_nodes.make_phase3_node(llm=ScriptedFakeChatModel())
+    node = graph.phase3.make_phase3_node(llm=ScriptedFakeChatModel())
     assert asyncio.run(node(state)) == {}
     after = bb_get_entry(before["entry_id"], "proj", include_history=True)["data"]
     assert after["entry_id"] == before["entry_id"]
@@ -508,9 +511,9 @@ def test_modify_updates_decision_without_rejecting_unselected(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     _make_boundary_and_decision("proj", "run-1", ("0x401000", "0x402000"))
     monkeypatch.setattr(
-        graph_nodes, "prompt_human", lambda message: "MODIFY 0x401000,0x409999"
+        graph.gates, "prompt_human", lambda message: "MODIFY 0x401000,0x409999"
     )
-    assert graph_nodes.approval_gate_node({
+    assert graph.gates.approval_gate_node({
         "sample_project_name": "proj", "run_id": "run-1",
     }) == {}
     decision = bb_query_entries("proj", {"entry_type": "decision"})["data"][0]
@@ -623,7 +626,7 @@ def test_pre_extract_resume_restores_run_id(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     bb_set_runtime("run_id", "run-1", "proj")
     bb_checkpoint("pre_extract_complete", "proj")
-    result = graph_nodes.pre_extract_node({
+    result = graph.gates.pre_extract_node({
         "sample_project_name": "proj", "resume": True,
     })
     assert result["run_id"] == "run-1"
@@ -633,16 +636,16 @@ def test_pre_extract_resume_restores_run_id(tmp_path, monkeypatch):
 def test_pre_extract_fresh_generates_new_run_id(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        graph_nodes, "pre_extract_sample",
+        graph.gates, "pre_extract_sample",
         lambda export_dir, project: {"status": "success"},
     )
     monkeypatch.setattr(
-        graph_nodes, "detect_sample_type",
+        graph.gates, "detect_sample_type",
         lambda export_dir: {"sample_type": "pe", "confidence": "high", "indicators": []},
     )
     state = {"sample_project_name": "fresh", "sample_export_dir": "unused", "resume": False}
-    first = graph_nodes.pre_extract_node(state)
-    second = graph_nodes.pre_extract_node(state)
+    first = graph.gates.pre_extract_node(state)
+    second = graph.gates.pre_extract_node(state)
     assert first["run_id"] != second["run_id"]
     assert bb_get_runtime("run_id", "fresh") == second["run_id"]
 
@@ -653,7 +656,7 @@ def test_pre_extract_resume_missing_run_id_raises(tmp_path, monkeypatch):
     bb_checkpoint("pre_extract_complete", "proj")
     bb_set_runtime("run_id", None, "proj")
     with pytest.raises(RuntimeError, match="resume 缺少 run_id"):
-        graph_nodes.pre_extract_node({
+        graph.gates.pre_extract_node({
             "sample_project_name": "proj", "resume": True,
         })
 
@@ -709,7 +712,7 @@ def test_worker_nodes_return_empty_and_write_entries(tmp_path, monkeypatch):
         "run_id": "run-1",
     }
     for spec in ALL_SPECS:
-        node = graph_nodes.make_worker_node(spec, ScriptedFakeChatModel())
+        node = graph.workers.make_worker_node(spec, ScriptedFakeChatModel())
         assert asyncio.run(node(state)) == {}
     assert len(bb_query_entries("proj", {"entry_type": "sample"})["data"]) == 1
     assert len(bb_query_entries("proj", {"entry_type": "finding"})["data"]) >= 3
@@ -737,7 +740,7 @@ def _make_phase3_function(project, run_id):
 def test_phase4_reports_are_entries_with_source_refs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _make_phase3_function("proj", "run-1")
-    shard_node = graph_nodes.make_shard_synthesis_node(llm=ScriptedFakeChatModel())
+    shard_node = graph.phase4.make_shard_synthesis_node(llm=ScriptedFakeChatModel())
     assert asyncio.run(shard_node({"sample_project_name": "proj", "run_id": "run-1"})) == {}
     shards = bb_query_entries("proj", {
         "entry_type": "report", "payload.report_kind": "shard",
@@ -745,7 +748,7 @@ def test_phase4_reports_are_entries_with_source_refs(tmp_path, monkeypatch):
     assert len(shards) == 1
     assert shards[0]["versions"][0]["relation_refs"][0]["version"] >= 1
 
-    aggregate_node = graph_nodes.make_aggregator_node(llm=ScriptedFakeChatModel())
+    aggregate_node = graph.phase4.make_aggregator_node(llm=ScriptedFakeChatModel())
     result = asyncio.run(aggregate_node({"sample_project_name": "proj", "run_id": "run-1"}))
     final = bb_get_entry(result["final_report_entry_id"], "proj")["data"]
     assert final["entry_type"] == "report"
@@ -789,7 +792,7 @@ def test_full_analysis_graph_smoke(tmp_path, monkeypatch):
     _CALL_COUNTS.clear()
     export_dir = _make_export_dir(str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(graph_nodes, "prompt_human", lambda message: "CONFIRM")
+    monkeypatch.setattr(graph.gates, "prompt_human", lambda message: "CONFIRM")
     final_state = asyncio.run(build_graph(llm=ScriptedFakeChatModel()).ainvoke({
         "sample_project_name": "test_proj",
         "sample_export_dir": export_dir,
@@ -821,7 +824,7 @@ def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
     export_dir = _make_export_dir(str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        graph_nodes, "prompt_human",
+        graph.gates, "prompt_human",
         lambda message: "MODIFY 0x401000,0x409999",
     )
 
@@ -847,7 +850,7 @@ def test_full_analysis_graph_modify_branch(tmp_path, monkeypatch):
 
 def test_enforce_context_budget_passthrough():
     """小体积 prompt 原样返回（会先被规范化为 messages）。"""
-    from graph_nodes import enforce_context_budget
+    from graph.runtime import enforce_context_budget
     messages = [("system", "sys"), ("user", "hello")]
     result = enforce_context_budget(messages)
     assert len(result) == 2
@@ -856,7 +859,7 @@ def test_enforce_context_budget_passthrough():
 
 def test_enforce_context_budget_truncates_oversized(monkeypatch, tmp_path):
     """单条超大消息会被截断以适配预算。"""
-    from graph_nodes import enforce_context_budget
+    from graph.runtime import enforce_context_budget
     # chdir 到无 config.yaml 的目录，让 MAX_CONTEXT_TOKENS 环境变量回退生效
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MAX_CONTEXT_TOKENS", "2000")
@@ -872,7 +875,7 @@ def test_enforce_context_budget_truncates_oversized(monkeypatch, tmp_path):
 
 def test_enforce_context_budget_raises_when_impossible(monkeypatch, tmp_path):
     """预算小到什么都装不下时必须抛出明确的错误。"""
-    from graph_nodes import enforce_context_budget
+    from graph.runtime import enforce_context_budget
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MAX_CONTEXT_TOKENS", "1")
     with pytest.raises(RuntimeError, match="上下文上限"):
@@ -880,7 +883,7 @@ def test_enforce_context_budget_raises_when_impossible(monkeypatch, tmp_path):
 
 
 def test_max_context_tokens_default(monkeypatch, tmp_path):
-    from graph_nodes import max_context_tokens
+    from graph.runtime import max_context_tokens
     monkeypatch.chdir(tmp_path)  # 避开仓库根目录的 config.yaml
     monkeypatch.delenv("MAX_CONTEXT_TOKENS", raising=False)
     assert max_context_tokens() == 128000

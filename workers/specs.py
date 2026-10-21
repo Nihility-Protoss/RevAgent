@@ -1,6 +1,6 @@
 """WorkerSpec：worker 的框架无关定义（提示词 + 统一 WorkerOutput schema）。
 
-Worker 不再有独立工具集声明：节点由 graph_nodes.make_worker_node 编译时
+Worker 不再有独立工具集声明：节点由 graph.workers.make_worker_node 编译时
 通过 tools.agent_tools.get_agent_tools(spec.name, ...) 按角色动态注入工具；
 产物统一为 tools.entry_models.WorkerOutput，由 bb_write_worker_output 投影为版本化条目。
 """
@@ -17,7 +17,7 @@ from workers.phase2.scheduler import SCHEDULER_INSTRUCTION
 
 @dataclass(frozen=True)
 class WorkerSpec:
-    """Worker 的纯数据定义：由 graph_nodes.make_worker_node 编译为图节点。"""
+    """Worker 的纯数据定义：由 graph.workers.make_worker_node 编译为图节点。"""
 
     name: str
     instruction: str  # 复用现有五段式提示词

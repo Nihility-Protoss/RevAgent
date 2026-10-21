@@ -34,7 +34,7 @@ async def run_analysis_with_blackboard(
     Returns:
         (final_state, token_report) 元组。
     """
-    from observability import TokenStatsCallback
+    from graph.observability import TokenStatsCallback
     from tools.file_loaders import resolve_export_dir
 
     if sample_export_dir is None:

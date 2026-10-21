@@ -7,16 +7,15 @@ START → pre_extract → {string_analyst, api_profiler, export_analyzer}（并�
 """
 from langgraph.graph import END, START, StateGraph
 
-from graph_nodes import (
+from graph.gates import (
     approval_gate_node,
-    make_aggregator_node,
-    make_phase3_node,
-    make_shard_synthesis_node,
-    make_worker_node,
     pre_extract_node,
     resolve_guides_node,
 )
-from state import AnalysisState
+from graph.phase3 import make_phase3_node
+from graph.phase4 import make_aggregator_node, make_shard_synthesis_node
+from graph.state import AnalysisState
+from graph.workers import make_worker_node
 from workers.specs import (
     PHASE0_SPECS,
     PHASE1_SPECS,

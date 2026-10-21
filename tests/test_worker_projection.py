@@ -77,7 +77,7 @@ def test_insufficient_data_does_not_create_empty_finding(tmp_path, monkeypatch):
 
 def test_worker_task_contains_idempotency_key_formula(tmp_path, monkeypatch):
     """任务文本必须包含幂等键公式、本次调用的具体值与角色适用的 subject_key 约定。"""
-    from graph_nodes import build_worker_task
+    from graph.workers import build_worker_task
     from workers.specs import (
         function_boundary_detector, scheduler, string_artifact_analyst,
     )
@@ -116,7 +116,7 @@ def test_invalid_inner_payload_returns_error_not_keyerror(tmp_path, monkeypatch)
 
 def test_projection_failure_is_logged_and_swallowed(tmp_path, monkeypatch):
     """投影失败（scheduler 地址未解析）记录 worker_projection_failed 事件且不抛异常。"""
-    from graph_nodes import _project_worker_output
+    from graph.workers import _project_worker_output
     from tools.entry_tools import bb_get_runtime
     from workers.specs import scheduler
 

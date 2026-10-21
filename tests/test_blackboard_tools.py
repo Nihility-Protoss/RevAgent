@@ -50,7 +50,7 @@ def test_bb_read_extract_chunked_strings(board_dir):
 
 
 def test_legacy_blackboard_api_is_not_referenced():
-    roots = [pathlib.Path("graph_nodes.py"), pathlib.Path("graph.py"), pathlib.Path("workers")]
+    roots = [pathlib.Path("graph"), pathlib.Path("workers")]
     forbidden = (
         "bb_read_summary", "bb_write_summary", "bb_read_artifact",
         "bb_write_artifact", "bb_list_summaries", "bb_has_artifact", "run_extraction",
