@@ -1,30 +1,30 @@
 # RevAgent 全局配置（main.py 运行时自动读取）
-# 优先级：本文件 > 环境变量 > 代码默认值
+# 优先级：本文件 > 代码默认值（唯一例外：llm.base_url 仍支持 BASE_URL 环境变量回退）
 # 进程启动时读取一次即冻结快照；之后本文件被其它进程改写不影响正在运行的进程
 # 注意：API_KEY 等机密请放 .env，不要写入本文件
 
 llm:
-  model: deepseek-flash                # 环境变量回退: MODEL
-  base_url: https://api.deepseek.com/v1  # 环境变量回退: BASE_URL
-  thinking: disabled                   # enabled/disabled，环境变量回退: THINKING
-  max_context_tokens: 128000           # 所有 agent 单次调用输入上限，环境变量回退: MAX_CONTEXT_TOKENS
+  model: deepseek-flash                # 模型名
+  base_url: https://api.deepseek.com/v1  # API 端点；环境变量 BASE_URL 可回退
+  thinking: disabled                   # enabled/disabled（思考模式与 Worker 结构化输出不兼容）
+  max_context_tokens: 128000           # 所有 agent 单次调用输入上限
   api_key_env: API_KEY                 # .env 中的变量名：本次分析用哪个 key 由这里决定；
                                        # 可放多个 key 用不同变量名分散并行配额（如 API_KEY_2）
   # api_key: null                      # 直接写字面量 key（不推荐，优先级高于 api_key_env）
 
 paths:
-  input_root: data/input               # *_export_for_ai 导出目录存放处，环境变量回退: INPUT_ROOT
-  output_root: data/output             # 黑板输出根目录，环境变量回退: BOARD_BASE_DIR
+  input_root: data/input               # *_export_for_ai 导出目录存放处
+  output_root: data/output             # 黑板输出根目录
 
 analysis:
-  project_name: module                 # data/output/ 下的存档名，环境变量回退: PROJECT_NAME
-  input_name: null                     # data/input/ 下的导出目录名（可省略 _export_for_ai 后缀），环境变量回退: INPUT_NAME
-  resume: false                        # 断点续跑，环境变量回退: RESUME
+  project_name: module                 # data/output/ 下的存档名（必填）
+  input_name: null                     # data/input/ 下的导出目录名（可省略 _export_for_ai 后缀），null 表示自动匹配
+  resume: false                        # 断点续跑
 
 agents:
   tool_mode: minimal                   # Worker 工具注入模式（minimal/全量），见 workers/specs.py
 
 blackboard:
-  flush_every_writes: 20               # 累计 N 次未落盘写后同步 flush，环境变量回退: BB_FLUSH_EVERY_WRITES
-  flush_interval_seconds: 5            # 首批 dirty 数据后启动的定时 flush 间隔，环境变量回退: BB_FLUSH_INTERVAL_SECONDS
-  backup_limit: 10                     # store.pickle 备份轮换上限，环境变量回退: BB_BACKUP_LIMIT
+  flush_every_writes: 20               # 累计 N 次未落盘写后同步 flush
+  flush_interval_seconds: 5            # 首批 dirty 数据后启动的定时 flush 间隔
+  backup_limit: 10                     # store.pickle 备份轮换上限

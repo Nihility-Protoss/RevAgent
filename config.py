@@ -1,6 +1,10 @@
 """全局配置：根目录 config.yaml 的统一读写入口。
 
-优先级：config.yaml > 环境变量 > 默认值。
+优先级：config.yaml > 代码默认值。
+
+`cfg()` 仍保留可选的环境变量回退参数（机制保留，便于测试与将来扩展），
+但生产代码只在 `llm.base_url` 上使用 `BASE_URL` 环境变量回退；其余配置项
+一律以 config.yaml 为准，缺省走代码默认值。
 
 快照语义：进程首次读取 config.yaml 后立即深拷贝一份冻结快照（`_snapshot`），
 文件句柄当场关闭；此后所有 `cfg()` / `cfg_int()` / `cfg_bool()` 只查快照，

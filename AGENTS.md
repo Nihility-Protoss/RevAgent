@@ -34,12 +34,12 @@
 
 ### 2.2 全局配置（config.yaml）
 
-运行时配置集中在根目录 **`config.yaml`**（已提交，勿写入机密），由 `config.py` 统一读写。优先级：**config.yaml > 环境变量 > 代码默认值**（无 CLI 参数）。
+运行时配置集中在根目录 **`config.yaml`**（已提交，勿写入机密），由 `config.py` 统一读写。优先级：**config.yaml > 代码默认值**（无 CLI 参数，也无环境变量回退；唯一例外是 `llm.base_url` 仍支持 `BASE_URL` 环境变量回退）。
 
 ```yaml
 llm:
-  model: deepseek-flash                  # env 回退: MODEL
-  base_url: https://api.deepseek.com/v1  # env 回退: BASE_URL
+  model: deepseek-flash                  # 模型名
+  base_url: https://api.deepseek.com/v1  # API 端点；唯一支持环境变量回退（BASE_URL）的配置项
   thinking: disabled                     # 思考模式与 Worker 结构化输出的强制 tool_choice 不兼容
   max_context_tokens: 128000             # 所有 agent 单次调用输入上限
   api_key_env: API_KEY                   # .env 中的变量名，决定本次分析用哪个 key
@@ -55,7 +55,7 @@ agents:
   tool_mode: minimal                     # Agent 工具模式：minimal（默认）/ full
 ```
 
-读取入口：`config.cfg("llm.model", env="MODEL", default=...)`（另有 `cfg_int` / `cfg_bool`）；写回入口：`config.write_config({...})`（深合并，值为 `None` 表示删键，写盘后自动重置快照）。
+读取入口：`config.cfg("llm.model", default=...)`（另有 `cfg_int` / `cfg_bool`）；写回入口：`config.write_config({...})`（深合并，值为 `None` 表示删键，写盘后自动重置快照）。`cfg()` 的 `env` 参数签名保留（便于测试），但生产代码只在 `llm.base_url` 上传入。
 
 **快照语义**：进程首次读取 `config.yaml` 后立即深拷贝一份冻结快照，文件句柄当场释放；此后所有 `cfg()` 只查快照，不再 stat / 重读文件。因此并行运行多个分析进程时，任一进程改写共享的 `config.yaml` 不会影响正在运行的进程（各自持有启动时的配置视图）。需要重新读盘时调用 `config.reset_config_cache()`——这是测试 chdir 到临时目录后重新加载的唯一逃生门（`tests/conftest.py` 的 autouse fixture 每个用例前后都会调它）。
 
@@ -194,7 +194,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-已彻底移除 CLI 参数（原 `-p` / `-i` / `-r`）：配置唯一来源是 `config.yaml` 的 `analysis.*`（环境变量 `PROJECT_NAME` / `INPUT_NAME` / `RESUME` 兜底）。`analysis.project_name` 缺失时 `main()` 抛 `RuntimeError` 并提示配置位置。配置文件在进程启动时读一次即冻结，因此可以同时运行多个进程分析不同样本——运行前改好各自 `analysis.*` 再启动即可，中途对 `config.yaml` 的改动（包括另一个进程的写入）不会影响已在运行的进程。输入目录解析规则：`analysis.input_name` 指定 > project-name 前缀匹配 > 唯一候选自动选用。不再需要 `--export-dir` / `--work-dir` / `--sample-type`：样本类型永远 auto，由 `pre_extract` 节点调 `detect_sample_type` 判定。
+已彻底移除 CLI 参数（原 `-p` / `-i` / `-r`）：配置唯一来源是 `config.yaml` 的 `analysis.*`（无环境变量回退）。`analysis.project_name` 缺失时 `main()` 抛 `RuntimeError` 并提示配置位置。配置文件在进程启动时读一次即冻结，因此可以同时运行多个进程分析不同样本——运行前改好各自 `analysis.*` 再启动即可，中途对 `config.yaml` 的改动（包括另一个进程的写入）不会影响已在运行的进程。输入目录解析规则：`analysis.input_name` 指定 > project-name 前缀匹配 > 唯一候选自动选用。不再需要 `--export-dir` / `--work-dir` / `--sample-type`：样本类型永远 auto，由 `pre_extract` 节点调 `detect_sample_type` 判定。
 
 **程序化调用（带黑板与断点）**
 
@@ -234,14 +234,14 @@ pytest -v
 - **错误处理**：Tool 函数统一返回 `{"status": "success|error", "error": None|str, ...}`，禁止直接抛出异常给上层；纯函数节点（如 `pre_extract_node`）允许抛出 `RuntimeError` 中止整轮分析。
 - **JSON 输出**：写入文件时统一使用 `ensure_ascii=False, indent=2`。
 - **条目枚举存储**：`tools/entry_models.py` 的公共枚举（`EntryType` / `SubjectKind` / `DataValidationStatus` / `ConclusionValidationStatus` / `ReviewStatus` 等）在条目 payload 中**以整数存储**（经 `enum_to_int`），读取侧再解析回枚举；新增枚举字段必须遵循同一约定。
-- **路径**：使用 `pathlib.Path` 或 `os.path.join`，跨平台兼容；黑板路径全部基于当前工作目录下的 `data/output/`（由 `tools.blackboard_tools.board_base_dir()` 决定，读 `config.yaml` 的 `paths.output_root`，环境变量 `BOARD_BASE_DIR` 兜底）。
+- **路径**：使用 `pathlib.Path` 或 `os.path.join`，跨平台兼容；黑板路径全部基于当前工作目录下的 `data/output/`（由 `tools.blackboard_tools.board_base_dir()` 决定，读 `config.yaml` 的 `paths.output_root`）。
 - **命名**：
   - Worker 模块：`{purpose}_{role}.py`，WorkerSpec `name` 与模块名一致。
   - 图状态（`graph/state.py`）只保留六个控制字段：`sample_project_name` / `sample_export_dir` / `sample_type` / `resume` / `run_id` / `final_report_entry_id`；不再承载 worker payload（旧 `string_analysis` 等 output_key 字段已随条目化移除）。
   - 产物投影键：`bb_write_worker_output` 按 `(run_id, phase, worker_name, subject_key)` 生成幂等键；full 模式 Agent 主动写入与框架兜底投影必须使用同一公式。
   - 黑板持久化：`data/output/{project}/entries/store.pickle`（版本化条目库），`extracts/` 仅存 Phase -1 预提取分片。
 - **Token 预算**：
-  - 所有 agent 单次 LLM 调用输入上限 128k tokens（`MAX_CONTEXT_TOKENS` 可覆盖）：Worker ReAct 循环由 `SummarizationMiddleware` 在 75% 阈值触发摘要压缩；Phase 3 / Phase 4 的直接调用统一走 `graph.runtime.invoke_guarded`（超限先头尾保留式截断，仍超限抛 `RuntimeError`）；
+  - 所有 agent 单次 LLM 调用输入上限 128k tokens（`config.yaml` 的 `llm.max_context_tokens` 可调）：Worker ReAct 循环由 `SummarizationMiddleware` 在 75% 阈值触发摘要压缩；Phase 3 / Phase 4 的直接调用统一走 `graph.runtime.invoke_guarded`（超限先头尾保留式截断，仍超限抛 `RuntimeError`）；
   - Worker 结构化输出（`WorkerOutput`）随版本化条目整存，无摘要硬约束；
   - Phase 3 函数分析 prompt 要求模型输出 ≤1000 tokens。
 - **置信度等级**：`high` / `medium` / `low`。`high` 必须有明确、无歧义的证据；不允许猜测不存在的数据。

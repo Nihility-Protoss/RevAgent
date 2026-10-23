@@ -17,8 +17,9 @@ _LLM = None
 
 
 def get_llm():
-    """返回共享 chat model（优先级：config.yaml > 环境变量 > 默认值）。
+    """返回共享 chat model（优先级：config.yaml > 代码默认值）。
 
+    唯一例外是端点 `llm.base_url` 仍支持 `BASE_URL` 环境变量回退。
     API key 解析：`llm.api_key` 字面量优先；否则读取 `llm.api_key_env`
     指定的环境变量（默认 API_KEY，密钥本身仍留在 .env 中）。
     """
@@ -31,13 +32,13 @@ def get_llm():
         # 思考模式与 create_agent 的强制 tool_choice（结构化输出）不兼容，
         # 默认关闭；需要思考模式时在 config.yaml 设 llm.thinking=enabled。
         _LLM = init_chat_model(
-            cfg("llm.model", env="MODEL", default="deepseek-flash"),
+            cfg("llm.model", default="deepseek-flash"),
             model_provider="openai",
             api_key=api_key,
             base_url=cfg("llm.base_url", env="BASE_URL", default="https://api.deepseek.com/v1"),
             temperature=0,
             max_retries=3,
-            extra_body={"thinking": {"type": cfg("llm.thinking", env="THINKING", default="disabled")}},
+            extra_body={"thinking": {"type": cfg("llm.thinking", default="disabled")}},
         )
     return _LLM
 
@@ -54,7 +55,7 @@ def set_llm(llm) -> None:
 def max_context_tokens() -> int:
     """单次 LLM 调用的输入 token 上限（config.yaml llm.max_context_tokens，默认 128k）。
     """
-    return cfg_int("llm.max_context_tokens", env="MAX_CONTEXT_TOKENS", default=128000)
+    return cfg_int("llm.max_context_tokens", default=128000)
 
 
 # ReAct 循环内历史超过该阈值即触发摘要压缩（留 ~25% 余量给输出与系统提示）

@@ -448,14 +448,13 @@ def get_store(project_name: str) -> ProjectStore:
                 project_name,
                 directory=directory,
                 flush_every_writes=cfg_int(
-                    "blackboard.flush_every_writes", env="BB_FLUSH_EVERY_WRITES", default=20
+                    "blackboard.flush_every_writes", default=20
                 ),
                 flush_interval_seconds=cfg_int(
-                    "blackboard.flush_interval_seconds",
-                    env="BB_FLUSH_INTERVAL_SECONDS", default=5,
+                    "blackboard.flush_interval_seconds", default=5,
                 ),
                 backup_limit=cfg_int(
-                    "blackboard.backup_limit", env="BB_BACKUP_LIMIT", default=10
+                    "blackboard.backup_limit", default=10
                 ),
             )
             _store_registry[directory] = store

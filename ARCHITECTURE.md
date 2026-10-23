@@ -228,7 +228,7 @@ Agent 接收一个**样本导出目录**作为输入：
 ### 5.1.1 版本化条目库（entry store）
 
 - **存储**：`tools/entry_store.py` 的 `ProjectStore` 维护内存态全量版本（每次写入追加不可变 `EntryVersion`，含 `ChangeReason` / reviewer / 校验状态），公共枚举（`EntryType` / `SubjectKind` / `DataValidationStatus` / `ReviewStatus` 等）在 payload 中以**整数存储**（`enum_to_int`）。
-- **持久化**：按写入次数与定时器触发**原子 pickle 快照**（`store.pickle.tmp` 写入后 `os.replace`），每次快照前把旧 `store.pickle` 轮转为 `store.bak.NNN.pickle`（默认保留最近 10 份，`blackboard.backup_limit` / `BB_BACKUP_LIMIT` 可调）。
+- **持久化**：按写入次数与定时器触发**原子 pickle 快照**（`store.pickle.tmp` 写入后 `os.replace`），每次快照前把旧 `store.pickle` 轮转为 `store.bak.NNN.pickle`（默认保留最近 10 份，由 `config.yaml` 的 `blackboard.backup_limit` 调整）。
 - **恢复**：加载时若 `store.pickle` 损坏，自动从新到旧尝试各备份文件，成功后记录 `recovered_from`；测试与进程退出经 `shutdown_stores()` 强制落盘。
 - **黑板原语**：`tools/blackboard_tools.py` 只保留原始证据能力（`extracts/` 分片读取、函数反编译片段加载），checkpoint / 日志 / review 全部在 `tools/entry_tools.py`。
 
@@ -250,7 +250,7 @@ print(str(token_report))                # 人类可读报告
 
 ### 5.3 上下文预算（128k）
 
-所有 agent 的单次 LLM 调用输入上限为 **128k tokens**（`config.yaml` 的 `llm.max_context_tokens`，环境变量 `MAX_CONTEXT_TOKENS` 兜底）：
+所有 agent 的单次 LLM 调用输入上限为 **128k tokens**（由 `config.yaml` 的 `llm.max_context_tokens` 调整）：
 
 - **Worker（ReAct 循环）**：`create_agent` 挂 `SummarizationMiddleware`，历史消息估算超过 128k 的 75% 时自动摘要压缩，保留最近 20 条消息。
 - **直接 LLM 调用**（Phase 3 / Phase 4）：统一走 `graph.runtime.invoke_guarded`，调用前 `enforce_context_budget` 估算 token，超限时从最长消息开始头尾保留式截断，截断后仍超限则抛 `RuntimeError`。
@@ -381,7 +381,7 @@ dependencies = [
 python main.py
 ```
 
-配置优先级：**`config.yaml` > 环境变量 > 默认值**（无 CLI 参数）。配置在进程启动时读取一次即冻结为快照，运行中途对 `config.yaml` 的改动（包括其它并行进程的写入）不影响当前进程，因此可同时启动多个进程分析不同样本。输入目录解析规则：`analysis.input_name` 指定 > project-name 前缀匹配 > 唯一候选自动选用；多个候选且无法确定时报错并列出候选。样本类型永远 auto，由 `pre_extract` 节点调用 `detect_sample_type` 判定。
+配置优先级：**`config.yaml` > 代码默认值**（无 CLI 参数，也无环境变量回退；唯一例外是 `llm.base_url` 仍支持 `BASE_URL`）。配置在进程启动时读取一次即冻结为快照，运行中途对 `config.yaml` 的改动（包括其它并行进程的写入）不影响当前进程，因此可同时启动多个进程分析不同样本。输入目录解析规则：`analysis.input_name` 指定 > project-name 前缀匹配 > 唯一候选自动选用；多个候选且无法确定时报错并列出候选。样本类型永远 auto，由 `pre_extract` 节点调用 `detect_sample_type` 判定。
 
 ### 9.2 程序化调用
 
@@ -400,5 +400,5 @@ final_state, token_report = asyncio.run(run_analysis_with_blackboard(
 
 - Python 3.10+
 - 根目录 `config.yaml`（模型/路径/分析默认值，随仓库提交）
-- `.env` 中的 `API_KEY`（唯一必需的机密配置；`BASE_URL` / `MODEL` 等已迁移至 `config.yaml`，环境变量仅作兜底）
+- `.env` 中的 `API_KEY`（唯一必需的机密配置；`MODEL` / `BASE_URL` 等已迁移至 `config.yaml`，其中只有 `BASE_URL` 仍保留环境变量回退）
 - IDA 无 MCP 导出目录（strings.txt, exports.txt, imports.txt, function_index.txt）

@@ -51,10 +51,10 @@ def test_cfg_bool(workdir):
 
 
 def test_cfg_none_value_falls_back(workdir, monkeypatch):
-    # yaml 中显式 null 视为缺失，回退环境变量
-    _write_yaml(workdir, "analysis:\n  input_name: null\n")
-    monkeypatch.setenv("INPUT_NAME", "env-input")
-    assert cfg("analysis.input_name", env="INPUT_NAME") == "env-input"
+    # yaml 中显式 null 视为缺失，回退环境变量（cfg 机制本身仍保留，生产代码不再使用）
+    _write_yaml(workdir, "custom:\n  value: null\n")
+    monkeypatch.setenv("TEST_CONFIG_ENV", "env-value")
+    assert cfg("custom.value", env="TEST_CONFIG_ENV") == "env-value"
 
 
 def test_write_config_roundtrip_and_merge(workdir):

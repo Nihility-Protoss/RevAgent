@@ -70,15 +70,15 @@ async def run_analysis_with_blackboard(
 def main() -> None:
     from config import cfg, cfg_bool
 
-    # 配置来源：config.yaml > 环境变量；无 CLI 覆盖
-    project_name = cfg("analysis.project_name", env="PROJECT_NAME")
+    # 配置来源：config.yaml > 代码默认值
+    project_name = cfg("analysis.project_name")
     if not project_name:
         raise RuntimeError(
             "未配置分析项目名：请在根目录 config.yaml 的 analysis.project_name 中配置"
-            "（data/output/ 下的存档名），或设置 PROJECT_NAME 环境变量。"
+            "（data/output/ 下的存档名）。"
         )
-    input_name = cfg("analysis.input_name", env="INPUT_NAME")
-    resume = cfg_bool("analysis.resume", env="RESUME", default=False)
+    input_name = cfg("analysis.input_name")
+    resume = cfg_bool("analysis.resume", default=False)
 
     asyncio.run(
         run_analysis_with_blackboard(

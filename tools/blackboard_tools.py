@@ -7,7 +7,7 @@ from config import cfg
 
 def board_base_dir() -> str:
     """黑板（blackboard）根目录：config.yaml 的 paths.output_root（默认 data/output）。"""
-    return cfg("paths.output_root", env="BOARD_BASE_DIR", default=os.path.join("data", "output"))
+    return cfg("paths.output_root", default=os.path.join("data", "output"))
 
 
 def board_path(project_name: str, *subpaths: str) -> str:

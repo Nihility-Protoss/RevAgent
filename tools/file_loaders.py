@@ -12,7 +12,7 @@ EXPORT_DIR_SUFFIX = "_export_for_ai"
 
 def default_input_root() -> str:
     """输入根目录：config.yaml paths.input_root（默认 data/input）。"""
-    return cfg("paths.input_root", env="INPUT_ROOT", default=DEFAULT_INPUT_ROOT)
+    return cfg("paths.input_root", default=DEFAULT_INPUT_ROOT)
 
 
 def find_export_dirs(input_root: Optional[str] = None) -> list:
