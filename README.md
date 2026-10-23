@@ -10,7 +10,7 @@
 
 系统基于 LangGraph 编排，整体流程为：**预提取 → 快速定性 → 行为定型与函数筛选 → 调度与人工审查 → 函数级深度分析 → 综合报告**。
 
-- `main.py`：运行入口，负责参数解析与分析流程启动。
+- `main.py`：运行入口，读取 `config.yaml` 配置快照后启动分析流程（无 CLI 参数）。
 - `graph/` 包（`builder.py` / `gates.py` / `workers.py` / `phase3.py` / `phase4.py`）：定义各阶段节点、流转关系和人工审批环节。
 - `workers/`：包含各阶段的 Worker 定义、提示词和专项分析知识。
 - `tools/`：提供输入文件加载、黑板读写、检查点和 Token 统计等工具。
