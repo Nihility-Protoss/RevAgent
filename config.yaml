@@ -1,5 +1,6 @@
 # RevAgent 全局配置（main.py 运行时自动读取）
-# 优先级：CLI 参数 > 本文件 > 环境变量 > 代码默认值
+# 优先级：本文件 > 环境变量 > 代码默认值
+# 进程启动时读取一次即冻结快照；之后本文件被其它进程改写不影响正在运行的进程
 # 注意：API_KEY 等机密请放 .env，不要写入本文件
 
 llm:
@@ -7,15 +8,18 @@ llm:
   base_url: https://api.deepseek.com/v1  # 环境变量回退: BASE_URL
   thinking: disabled                   # enabled/disabled，环境变量回退: THINKING
   max_context_tokens: 128000           # 所有 agent 单次调用输入上限，环境变量回退: MAX_CONTEXT_TOKENS
+  api_key_env: API_KEY                 # .env 中的变量名：本次分析用哪个 key 由这里决定；
+                                       # 可放多个 key 用不同变量名分散并行配额（如 API_KEY_2）
+  # api_key: null                      # 直接写字面量 key（不推荐，优先级高于 api_key_env）
 
 paths:
   input_root: data/input               # *_export_for_ai 导出目录存放处，环境变量回退: INPUT_ROOT
   output_root: data/output             # 黑板输出根目录，环境变量回退: BOARD_BASE_DIR
 
 analysis:
-  project_name: module                 # CLI -p 可覆盖，环境变量回退: PROJECT_NAME
-  input_name: null                     # data/input/ 下的导出目录名（可省略 _export_for_ai 后缀），CLI -i 可覆盖
-  resume: false                        # CLI -r 可覆盖
+  project_name: module                 # data/output/ 下的存档名，环境变量回退: PROJECT_NAME
+  input_name: null                     # data/input/ 下的导出目录名（可省略 _export_for_ai 后缀），环境变量回退: INPUT_NAME
+  resume: false                        # 断点续跑，环境变量回退: RESUME
 
 agents:
   tool_mode: minimal                   # Worker 工具注入模式（minimal/全量），见 workers/specs.py

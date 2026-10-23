@@ -1,5 +1,6 @@
 """LLM 运行时基础设施：共享模型、上下文预算与 JSON 容错解析。"""
 import json
+import os
 from typing import Any, Optional
 
 from dotenv import load_dotenv
@@ -17,16 +18,22 @@ _LLM = None
 
 def get_llm():
     """返回共享 chat model（优先级：config.yaml > 环境变量 > 默认值）。
+
+    API key 解析：`llm.api_key` 字面量优先；否则读取 `llm.api_key_env`
+    指定的环境变量（默认 API_KEY，密钥本身仍留在 .env 中）。
     """
     global _LLM
     if _LLM is None:
         load_dotenv()
+        api_key = cfg("llm.api_key")
+        if not api_key:
+            api_key = os.getenv(cfg("llm.api_key_env", default="API_KEY"))
         # 思考模式与 create_agent 的强制 tool_choice（结构化输出）不兼容，
         # 默认关闭；需要思考模式时在 config.yaml 设 llm.thinking=enabled。
         _LLM = init_chat_model(
             cfg("llm.model", env="MODEL", default="deepseek-flash"),
             model_provider="openai",
-            api_key=cfg("llm.api_key", env="API_KEY"),
+            api_key=api_key,
             base_url=cfg("llm.base_url", env="BASE_URL", default="https://api.deepseek.com/v1"),
             temperature=0,
             max_retries=3,
