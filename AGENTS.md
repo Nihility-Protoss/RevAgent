@@ -34,7 +34,7 @@
 
 ### 2.2 全局配置（config.yaml）
 
-运行时配置集中在根目录 **`config.yaml`**（已提交，勿写入机密），由 `config.py` 统一读写。优先级：**CLI 参数 > config.yaml > 环境变量 > 代码默认值**。
+运行时配置集中在根目录 **`config.yaml`**（已提交，勿写入机密），由 `config.py` 统一读写。优先级：**config.yaml > 环境变量 > 代码默认值**（无 CLI 参数）。
 
 ```yaml
 llm:
@@ -42,20 +42,24 @@ llm:
   base_url: https://api.deepseek.com/v1  # env 回退: BASE_URL
   thinking: disabled                     # 思考模式与 Worker 结构化输出的强制 tool_choice 不兼容
   max_context_tokens: 128000             # 所有 agent 单次调用输入上限
+  api_key_env: API_KEY                   # .env 中的变量名，决定本次分析用哪个 key
+  # api_key: null                        # 可选：直接写字面量 key（优先级高于 api_key_env）
 paths:
   input_root: data/input                 # *_export_for_ai 自动发现
   output_root: data/output               # 黑板输出根目录
 analysis:
-  project_name: module                   # CLI -p 覆盖
-  input_name: null                       # CLI -i 覆盖
-  resume: false                          # CLI -r 覆盖
+  project_name: module                   # data/output/ 下的存档名
+  input_name: null                       # data/input/ 下导出目录名，null 表示自动匹配
+  resume: false                          # 断点续跑
 agents:
   tool_mode: minimal                     # Agent 工具模式：minimal（默认）/ full
 ```
 
-读取入口：`config.cfg("llm.model", env="MODEL", default=...)`（另有 `cfg_int` / `cfg_bool`）；写回入口：`config.write_config({...})`（深合并，值为 `None` 表示删键）。`config.yaml` 相对当前工作目录解析并按 mtime 缓存，测试 chdir 到临时目录后自动回退到环境变量/默认值。
+读取入口：`config.cfg("llm.model", env="MODEL", default=...)`（另有 `cfg_int` / `cfg_bool`）；写回入口：`config.write_config({...})`（深合并，值为 `None` 表示删键，写盘后自动重置快照）。
 
-**`API_KEY` 仍放 `.env`**（已 gitignore，也可在 `llm.api_key` 配置但不推荐）。`graph.runtime.get_llm()` 用上述配置构造 `init_chat_model(..., extra_body={"thinking": ...})`，**不再需要 `GOOGLE_API_KEY`**。测试用 `graph.runtime.set_llm(fake)` 或 `build_graph(llm=fake)` 注入假模型。
+**快照语义**：进程首次读取 `config.yaml` 后立即深拷贝一份冻结快照，文件句柄当场释放；此后所有 `cfg()` 只查快照，不再 stat / 重读文件。因此并行运行多个分析进程时，任一进程改写共享的 `config.yaml` 不会影响正在运行的进程（各自持有启动时的配置视图）。需要重新读盘时调用 `config.reset_config_cache()`——这是测试 chdir 到临时目录后重新加载的唯一逃生门（`tests/conftest.py` 的 autouse fixture 每个用例前后都会调它）。
+
+**`API_KEY` 仍放 `.env`**（已 gitignore）。`config.yaml` 的 `llm.api_key_env` 只记录变量名，决定本次分析用哪个 key（可放多个 key 用不同变量名分散并行配额）；`llm.api_key` 字面量优先于该环境变量，但不推荐。`graph.runtime.get_llm()` 用上述配置构造 `init_chat_model(..., extra_body={"thinking": ...})`，**不再需要 `GOOGLE_API_KEY`**。测试用 `graph.runtime.set_llm(fake)` 或 `build_graph(llm=fake)` 注入假模型。
 
 ### 2.3 pytest 配置
 
@@ -73,7 +77,7 @@ python_files = ["test_*.py", "???_test_*.py"]  # 兼容 unit/tools 下 010_ 等�
 
 ```
 multi-agent-adk/
-├── main.py                           # 运行时入口：CLI 参数解析 + run_analysis_with_blackboard
+├── main.py                           # 运行时入口：读 config.yaml 后跑 run_analysis_with_blackboard
 ├── graph/                            # 编排包
 │   ├── __init__.py                   # 导出 build_graph
 │   ├── builder.py                    # 唯一编排定义处：build_graph(llm, checkpointer)
@@ -116,7 +120,7 @@ multi-agent-adk/
 │   └── phase4/
 │       └── synthesis_agent.py        # 分片综合 / 聚合 prompt
 ├── tests/                            # 测试集（编排层通过假模型注入 + graph.ainvoke 离线运行）
-│   ├── conftest.py                   # 公共 fixture：每个测试后关闭条目库
+│   ├── conftest.py                   # 公共 fixture：每用例前后重置 config 快照、测试后关闭条目库
 │   ├── fake_llm.py                   # 共享的脚本化假聊天模型与最小 IDA 导出 fixture
 │   ├── unit/                         # 单元测试
 │   │   ├── test_config.py
@@ -177,22 +181,20 @@ pip install -e .
 API_KEY=your_key_here
 ```
 
-其余运行时配置（模型、端点、路径、分析默认值）都在根目录 `config.yaml`，见 2.2 节。
+其余运行时配置（模型、端点、路径、分析默认值）都在根目录 `config.yaml`，见 2.2 节。`.env` 里的变量名要与 `config.yaml` 的 `llm.api_key_env`（默认 `API_KEY`）一致；多个并行进程可用不同变量名（如 `API_KEY_2`）分散配额。
 
 ### 4.2 运行方式
 
-**CLI**
+**CLI（无参数）**
 
 ```bash
 source .venv/bin/activate
 # 输入放 data/input/ 下的 *_export_for_ai 目录，自动发现
-python main.py \
-    -p sample_001 \            # --project-name：data/output/ 子目录名
-    # -i module.upx            # --input-name：可选，指定导出目录（可省略 _export_for_ai 后缀）
-    # -r                       # --resume：可选，断点续跑
+# 项目名、输入目录、是否续跑全部来自 config.yaml 的 analysis.*
+python main.py
 ```
 
-三个参数的默认值均取自 `config.yaml` 的 `analysis.*`（CLI 传参优先，环境变量 `PROJECT_NAME` / `INPUT_NAME` / `RESUME` 兜底）；`config.yaml` 配好 `analysis.project_name` 后可直接 `python main.py` 无参运行。输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用。不再需要 `--export-dir` / `--work-dir` / `--sample-type`：样本类型永远 auto，由 `pre_extract` 节点调 `detect_sample_type` 判定。
+已彻底移除 CLI 参数（原 `-p` / `-i` / `-r`）：配置唯一来源是 `config.yaml` 的 `analysis.*`（环境变量 `PROJECT_NAME` / `INPUT_NAME` / `RESUME` 兜底）。`analysis.project_name` 缺失时 `main()` 抛 `RuntimeError` 并提示配置位置。配置文件在进程启动时读一次即冻结，因此可以同时运行多个进程分析不同样本——运行前改好各自 `analysis.*` 再启动即可，中途对 `config.yaml` 的改动（包括另一个进程的写入）不会影响已在运行的进程。输入目录解析规则：`analysis.input_name` 指定 > project-name 前缀匹配 > 唯一候选自动选用。不再需要 `--export-dir` / `--work-dir` / `--sample-type`：样本类型永远 auto，由 `pre_extract` 节点调 `detect_sample_type` 判定。
 
 **程序化调用（带黑板与断点）**
 
@@ -255,7 +257,7 @@ pytest -v
   - `tests/unit/workers/test_workers.py` / `test_phase3.py` / `test_phase4.py` / `test_worker_projection.py`：验证 WorkerSpec 存在、名称、schema、prompt 必要字段与产物投影。
   - `tests/unit/workers/test_knowledge.py`：验证知识库注册表、token 预算、`__active__` 解析、`match_guides` 路由。
   - `tests/unit/graph/`：验证 `build_graph` 图结构与状态白名单、上下文预算截断、Token 报告、知识路由、预提取 run_id、Worker/Phase 4 节点本地行为。
-  - `tests/unit/test_config.py`：验证 `config.py` 的读取优先级与默认值。
+  - `tests/unit/test_config.py`：验证 `config.py` 的读取优先级、默认值与快照语义（首次读取后改文件不影响快照、`reset_config_cache()` 后读到新内容、写盘后中途被改写不影响本进程）。
 - **集成测试**（`tests/integration/`）：
   - `test_graph_e2e.py`：验证 `graph.ainvoke` 端到端编排（假模型注入）、TokenStatsCallback 报告统计、运行入口退出落盘。
   - `test_hitl_approval.py`：验证 approval_gate HITL 协议解析与 CONFIRM / MODIFY / 默认放行的审查写入。

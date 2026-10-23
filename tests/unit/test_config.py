@@ -5,7 +5,7 @@ import os
 import pytest
 
 import config
-from config import cfg, cfg_bool, cfg_int, load_config, write_config
+from config import cfg, cfg_bool, cfg_int, load_config, reset_config_cache, write_config
 
 
 @pytest.fixture()
@@ -72,7 +72,45 @@ def test_write_config_roundtrip_and_merge(workdir):
 def test_load_config_missing_and_empty(workdir):
     assert load_config() == {}
     _write_yaml(workdir, "")
+    reset_config_cache()  # 快照已冻结，需显式重置才能读到刚写入的空文件
     assert load_config() == {}
+
+
+# === 快照语义 ===========================================================================
+
+def test_snapshot_freezes_first_read(workdir):
+    """首次读取后改写 config.yaml 不影响本进程的快照值。"""
+    path = _write_yaml(workdir, "llm:\n  model: first\n")
+    assert cfg("llm.model") == "first"
+    # 模拟另一进程在运行中途改写共享配置
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("llm:\n  model: second\n")
+    assert cfg("llm.model") == "first"
+    assert load_config()["llm"]["model"] == "first"
+
+
+def test_reset_config_cache_reads_new_content(workdir):
+    """reset_config_cache() 后重新读盘生成新快照。"""
+    path = _write_yaml(workdir, "llm:\n  model: first\n")
+    assert cfg("llm.model") == "first"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("llm:\n  model: second\n")
+    reset_config_cache()
+    assert cfg("llm.model") == "second"
+
+
+def test_snapshot_survives_concurrent_rewrite_after_write(workdir):
+    """write_config 写盘后可立即被另一进程改写，本进程读取不受中途改写影响。"""
+    path = _write_yaml(workdir, "llm:\n  model: old\n")
+    write_config({"llm": {"model": "mine"}})
+    assert cfg("llm.model") == "mine"
+    # 另一进程紧跟着改写同一文件
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("llm:\n  model: other-process\n")
+    assert cfg("llm.model") == "mine"
+    # 本进程主动重载后才看到新内容
+    reset_config_cache()
+    assert cfg("llm.model") == "other-process"
 
 
 def test_entry_tool_and_persistence_defaults():
@@ -84,6 +122,7 @@ def test_entry_tool_and_persistence_defaults():
         (Path(__file__).parents[2] / "config.yaml").read_text(encoding="utf-8")
     )
     assert data["agents"]["tool_mode"] == "minimal"
+    assert data["llm"]["api_key_env"] == "API_KEY"
     assert data["blackboard"]["flush_every_writes"] == 20
     assert data["blackboard"]["flush_interval_seconds"] == 5
     assert data["blackboard"]["backup_limit"] == 10

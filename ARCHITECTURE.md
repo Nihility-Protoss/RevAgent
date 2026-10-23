@@ -261,7 +261,7 @@ print(str(token_report))                # 人类可读报告
 
 ```
 multi-agent-adk/
-├── main.py                           # 运行时入口：CLI 参数解析 + run_analysis_with_blackboard
+├── main.py                           # 运行时入口：读 config.yaml 快照 + run_analysis_with_blackboard
 ├── graph/                            # 编排包
 │   ├── __init__.py                   # 导出 build_graph
 │   ├── builder.py                    # 唯一编排定义处：build_graph(llm, checkpointer) StateGraph 组装
@@ -272,7 +272,7 @@ multi-agent-adk/
 │   ├── runtime.py                    # get_llm/set_llm、invoke_guarded、上下文预算、JSON 容错解析
 │   ├── state.py                      # AnalysisState(TypedDict)：六个控制字段（见 5.1）
 │   └── observability.py              # TokenStatsCallback：按 langgraph_node 聚合 token 用量
-├── config.py                         # 全局配置读写入口（config.yaml 加载，CLI > yaml > env > 默认值）
+├── config.py                         # 全局配置读写入口（config.yaml 启动快照，yaml > env > 默认值）
 ├── config.yaml                       # 全局配置：llm / paths / analysis
 ├── pyproject.toml                    # 项目依赖 + pytest 配置
 ├── .env                              # API_KEY（已 gitignore；其余配置在 config.yaml）
@@ -373,17 +373,15 @@ dependencies = [
 
 ## 9. 运行方式
 
-### 9.1 CLI
+### 9.1 运行
 
 ```bash
-# API_KEY 写入 .env；模型/路径/分析默认值在根目录 config.yaml
-python main.py \
-    -p malware_sample_001      # --project-name：data/output/ 子目录名
-    # -i module.upx            # --input-name：可选，指定 data/input/ 下的导出目录（可省略 _export_for_ai 后缀）
-    # -r                       # --resume：可选，断点续跑（跳过 Phase -1）
+# API_KEY 写入 .env（变量名由 config.yaml 的 llm.api_key_env 指定）；
+# 模型/路径/分析默认值全部在根目录 config.yaml 的 analysis.* 段
+python main.py
 ```
 
-配置优先级：**CLI 参数 > `config.yaml` > 环境变量 > 默认值**。输入目录解析规则：显式 `-i` > project-name 前缀匹配 > 唯一候选自动选用；多个候选且无法确定时报错并列出候选。`config.yaml` 配好 `analysis.project_name` 后可无参运行。样本类型永远 auto，由 `pre_extract` 节点调用 `detect_sample_type` 判定。
+配置优先级：**`config.yaml` > 环境变量 > 默认值**（无 CLI 参数）。配置在进程启动时读取一次即冻结为快照，运行中途对 `config.yaml` 的改动（包括其它并行进程的写入）不影响当前进程，因此可同时启动多个进程分析不同样本。输入目录解析规则：`analysis.input_name` 指定 > project-name 前缀匹配 > 唯一候选自动选用；多个候选且无法确定时报错并列出候选。样本类型永远 auto，由 `pre_extract` 节点调用 `detect_sample_type` 判定。
 
 ### 9.2 程序化调用
 
