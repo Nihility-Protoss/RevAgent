@@ -52,7 +52,9 @@ analysis:
   input_name: null                       # data/input/ 下导出目录名，null 表示自动匹配
   resume: false                          # 断点续跑
 agents:
-  tool_mode: minimal                     # Agent 工具模式：minimal（默认）/ full
+  # minimal（默认）= 各角色固定只读工具子集，无写入工具，结果由框架投影为条目，适合小模型
+  # full = 所有 Worker 共享通用读写工具集（写入受 run_id 约束），适合强模型主动查历史/补写条目
+  tool_mode: minimal                     # Agent 工具模式：minimal / full
 ```
 
 读取入口：`config.cfg("llm.model", default=...)`（另有 `cfg_int` / `cfg_bool`）；写回入口：`config.write_config({...})`（深合并，值为 `None` 表示删键，写盘后自动重置快照）。`cfg()` 的 `env` 参数签名保留（便于测试），但生产代码只在 `llm.base_url` 上传入。

@@ -22,7 +22,15 @@ analysis:
   resume: false                        # 断点续跑
 
 agents:
-  tool_mode: minimal                   # Worker 工具注入模式（minimal/全量），见 workers/specs.py
+  # Worker 工具注入模式（tools/agent_tools.get_agent_tools），可选值：
+  #   minimal（默认）：每个角色只注入固定的只读工具子集（如字符串分析师只能 read_strings_data），
+  #                    命令文法固定（next / chunk=N / keyword=...），模型没有写入工具；
+  #                    分析结果由框架在节点内统一投影为条目。适合能力有限的本地小模型。
+  #   full：所有 Worker 共享通用工具集——读取/历史/查询/上下文（bb_get_entry /
+  #         bb_get_entry_history / bb_query_entries / bb_build_context / bb_find_operation）
+  #         与写入（bb_create_entry / bb_append_version / bb_validate_entry，受 producer.run_id 约束）；
+  #         审查/落盘/runtime/checkpoint 等特权工具仍不开放。适合强模型主动查历史条目或补写条目。
+  tool_mode: minimal
 
 blackboard:
   flush_every_writes: 20               # 累计 N 次未落盘写后同步 flush
